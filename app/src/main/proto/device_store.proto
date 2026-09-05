@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package relayremote;
+
+option java_package = "io.coreback.relayremote.data.proto";
+option java_multiple_files = true;
+
+message DeviceStore {
+  repeated SavedDevice devices = 1;
+  string selected_device_id = 2;
+  bool keep_screen_awake = 3;
+  uint32 skip_seconds = 4;
+}
+
+message SavedDevice {
+  string id = 1;
+  string discovered_name = 2;
+  string alias = 3;
+  string model = 4;
+  bytes credential_envelope = 5;
+  repeated string favorite_bundle_ids = 6;
+  repeated SavedEndpoint endpoints = 7;
+  int64 last_seen_epoch_millis = 8;
+  repeated string identity_aliases = 9;
+}
+
+message SavedEndpoint {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    COMPANION = 1;
+    MEDIA_REMOTE = 2;
+    AIRPLAY = 3;
+  }
+
+  Kind kind = 1;
+  repeated string addresses = 2;
+  uint32 port = 3;
+}

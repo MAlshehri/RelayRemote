@@ -1,0 +1,36 @@
+# Local IDE, agent, and operating-system state
+.idea/
+.agents/
+.codex/
+.claude/
+.DS_Store
+*.iml
+
+# Build outputs and machine-specific SDK configuration
+.gradle/
+.kotlin/
+**/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+artifacts/
+
+# Private signing material, credentials, and diagnostics
+*.jks
+*.keystore
+*.p12
+*.pem
+.env
+.env.*
+!.env.example
+*.log
+*.hprof
+*.apk
+*.aab
+
+# Internal development briefs and historical working notes
+/prompt.md
+/docs/superpowers/
+/docs/UX_CONNECTIVITY_AUDIT_2026-08-25.md
+/docs/screenshots/relay-remote-main.png
