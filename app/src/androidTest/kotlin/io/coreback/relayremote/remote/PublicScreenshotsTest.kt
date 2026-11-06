@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.test.platform.app.InstrumentationRegistry
+import io.coreback.relayremote.protocol.AppleTvApp
 import io.coreback.relayremote.protocol.Capability
 import io.coreback.relayremote.protocol.CapabilitySet
 import io.coreback.relayremote.protocol.ConnectionState
@@ -20,9 +21,21 @@ class PublicScreenshotsTest {
 
     @Test fun remote() = capture("remote", RemoteSheet.NONE, "Living Room")
     @Test fun settings() = capture("settings", RemoteSheet.SETTINGS, "Settings")
+    @Test fun more() = capture("more", RemoteSheet.MORE, "More controls")
+    @Test fun directionalButtons() = capture(
+        "directional-buttons",
+        RemoteSheet.NONE,
+        "Living Room",
+        directionalButtons = true,
+    )
 
-    private fun capture(name: String, sheet: RemoteSheet, expectedText: String) {
-        val available = Capability.entries.toSet() - Capability.MUTE - Capability.NOW_PLAYING
+    private fun capture(
+        name: String,
+        sheet: RemoteSheet,
+        expectedText: String,
+        directionalButtons: Boolean = false,
+    ) {
+        val available = Capability.entries.toSet() - Capability.NOW_PLAYING
         compose.setContent {
             RelayRemoteTheme {
                 RemoteScreen(
@@ -34,6 +47,13 @@ class PublicScreenshotsTest {
                         capabilities = CapabilitySet(implemented = available, available = available),
                         discoveryRefreshing = false,
                         sheet = sheet,
+                        directionalButtons = directionalButtons,
+                        apps = listOf(
+                            AppleTvApp("demo.movies", "Movies"),
+                            AppleTvApp("demo.music", "Music"),
+                            AppleTvApp("demo.photos", "Photos"),
+                        ),
+                        favoriteBundleIds = setOf("demo.movies", "demo.music", "demo.photos"),
                     ),
                     onOpenSheet = {}, onCloseSheet = {}, onSelectDevice = {},
                     onStartPairing = {}, onPinChanged = {}, onSubmitPin = {},

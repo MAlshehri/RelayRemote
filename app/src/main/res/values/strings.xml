@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Relay Remote</string>
+    <string name="tile_label">Apple TV Remote</string>
 </resources>

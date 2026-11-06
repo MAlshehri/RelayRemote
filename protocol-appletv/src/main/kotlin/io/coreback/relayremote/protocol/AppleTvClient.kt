@@ -14,15 +14,30 @@ interface AppleTvClient {
     val nowPlaying: StateFlow<NowPlaying?>
     val powerState: StateFlow<PowerState>
 
+    /** True while [mute] has silenced the session and can restore the prior level. */
+    val muted: StateFlow<Boolean>
+
     suspend fun connect()
     suspend fun disconnect()
     suspend fun beginPairing()
     suspend fun pair(pin: String): PairingCredentials
     suspend fun sendCommand(command: AppleTvCommand)
     suspend fun skipBy(seconds: Int)
+
+    /**
+     * Forwards one live touchpad event. Events must be sent in the order they happened;
+     * a held Select must be ended with [TouchGesture.HoldEnded], and a begun touch
+     * with [TouchGesture.Ended].
+     */
     suspend fun sendTouchGesture(gesture: TouchGesture)
+
+    /** Starts or stops continuous rewind or fast-forward. Every start needs a matching stop. */
+    suspend fun setScan(direction: ScanDirection, active: Boolean)
+
     suspend fun listApps(): List<AppleTvApp>
     suspend fun launchApp(bundleId: String)
+    suspend fun listAccounts(): List<AppleTvAccount>
+    suspend fun switchAccount(accountId: String)
     suspend fun getKeyboardText(): String?
     suspend fun setKeyboardText(operation: KeyboardOperation)
     suspend fun wake()
@@ -56,6 +71,11 @@ enum class Capability {
     NEXT,
     SKIP_FORWARD,
     SKIP_BACKWARD,
+    FAST_FORWARD,
+    REWIND,
+    CHANNELS,
+    SCREENSAVER,
+    ACCOUNTS,
     WAKE,
     SLEEP,
     VOLUME,
@@ -84,26 +104,45 @@ enum class AppleTvCommand {
     LEFT,
     RIGHT,
     SELECT,
+
+    /** Holds Select: opens the menu for the highlighted item, such as an app on the Home Screen. */
+    SELECT_LONG_PRESS,
     BACK,
+
+    /** Holds Back: returns to the Home Screen. */
+    BACK_LONG_PRESS,
     HOME,
+
+    /** Opens Control Center, the same action as holding the TV button. */
     HOME_LONG_PRESS,
+
+    /** Opens the App Switcher. */
     HOME_DOUBLE_PRESS,
     PLAY_PAUSE,
     PREVIOUS,
     NEXT,
+    GUIDE,
+    CHANNEL_UP,
+    CHANNEL_DOWN,
+    SCREENSAVER,
 }
 
+enum class ScanDirection {
+    REWIND,
+    FAST_FORWARD,
+}
+
+/** Live events from the touchpad, in normalized 0..1 coordinates. */
 sealed interface TouchGesture {
-    data class Tap(val x: Float, val y: Float) : TouchGesture
-    data class DoubleTap(val x: Float, val y: Float) : TouchGesture
-    data class Hold(val x: Float, val y: Float, val durationMillis: Long) : TouchGesture
-    data class Swipe(
-        val startX: Float,
-        val startY: Float,
-        val endX: Float,
-        val endY: Float,
-        val durationMillis: Long,
-    ) : TouchGesture
+    data class Began(val x: Float, val y: Float) : TouchGesture
+    data class Moved(val x: Float, val y: Float) : TouchGesture
+    data class Ended(val x: Float, val y: Float) : TouchGesture
+
+    /** The finger stayed still long enough: press and keep holding Select. */
+    data object HoldStarted : TouchGesture
+
+    /** Releases the held Select, no earlier than tvOS needs to recognize the hold. */
+    data object HoldEnded : TouchGesture
 }
 
 sealed interface KeyboardOperation {
@@ -115,6 +154,11 @@ sealed interface KeyboardOperation {
 
 data class AppleTvApp(
     val bundleId: String,
+    val name: String,
+)
+
+data class AppleTvAccount(
+    val id: String,
     val name: String,
 )
 

@@ -16,6 +16,7 @@ data class DeviceSettings(
     val selectedDeviceId: String?,
     val keepScreenAwake: Boolean,
     val skipSeconds: Int,
+    val directionalButtons: Boolean = false,
 )
 
 data class StoredAppleTv(
@@ -50,6 +51,7 @@ class DeviceRepository(
             keepScreenAwake = store.keepScreenAwake,
             skipSeconds = store.skipSeconds.takeIf(SUPPORTED_SKIP_SECONDS::contains)
                 ?: DEFAULT_SKIP_SECONDS,
+            directionalButtons = store.directionalButtons,
         )
     }.distinctUntilChanged()
 
@@ -145,6 +147,10 @@ class DeviceRepository(
 
     suspend fun setKeepScreenAwake(enabled: Boolean) {
         source.update { it.toBuilder().setKeepScreenAwake(enabled).build() }
+    }
+
+    suspend fun setDirectionalButtons(enabled: Boolean) {
+        source.update { it.toBuilder().setDirectionalButtons(enabled).build() }
     }
 
     suspend fun setSkipSeconds(seconds: Int) {

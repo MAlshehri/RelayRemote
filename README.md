@@ -25,9 +25,11 @@ network using an encrypted Companion Link session.
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/remote.png" width="280" alt="Remote screen with touchpad, navigation, volume, and 30-second skip controls">
+  <img src="docs/screenshots/remote.png" width="280" alt="Remote screen with favorite apps, touchpad, navigation, volume, and 30-second skip controls">
   &nbsp;&nbsp;
-  <img src="docs/screenshots/settings.png" width="280" alt="Settings sheet with configurable playback skip interval">
+  <img src="docs/screenshots/more.png" width="280" alt="More controls with Item menu, Control Center, Guide, and steps for moving or removing an app">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/settings.png" width="280" alt="Settings sheet with directional buttons and configurable playback skip interval">
 </p>
 
 Captured from the actual app UI on an Android emulator using fictional device
@@ -35,16 +37,26 @@ data. Available controls depend on the connected TV and active app.
 
 ## What you can do
 
-- **Navigate:** use the touch surface, directional controls, Select, Back, and Home.
+- **Navigate:** swipe on the touchpad, with your finger's movement sent live, or
+  turn on **Directional buttons** in Settings. Tap to select. Hold Back for the
+  Home Screen, hold Home for Control Center, and double-tap Home for open apps.
+- **Open item menus:** hold the center of the touchpad on a highlighted item. On
+  the Home Screen, that menu is how you move, delete, or offload an app. **More**
+  has the steps, plus a button for the same menu.
 - **Control playback:** Play/Pause, plus a separate rewind/forward row with a
-  configurable skip interval in Settings.
+  configurable skip interval in Settings. Hold rewind or forward to scan when
+  the app supports it.
+- **Use extra TV controls:** Guide, Channel up and down, Screensaver, and
+  switching between Apple TV profiles, all in **More**.
 - **Manage devices:** pair, reconnect, rename, and forget saved Apple TVs.
-- **Launch apps:** browse the TV's applications and keep favorites close by.
+- **Launch apps:** browse the TV's applications and pin favorites to the remote.
+- **Open it quickly:** add the Apple TV Remote tile to Android Quick Settings.
 - **Type from your phone:** use the keyboard when tvOS exposes a text field.
   Current-text loading, full-value updates, Clear, Reload, and retry handling
   are implemented; real-TV acceptance remains pending.
 - **Adjust volume and power:** supported controls appear when the session
-  advertises them. Hold Sleep for about 700 ms to avoid accidental activation.
+  advertises them. Mute saves the current volume and restores it when you unmute.
+  Sleep asks you to confirm first.
 
 ## Get started
 
@@ -121,8 +133,9 @@ tracks the remaining hardware checks.
 | Keyboard cannot load text | Focus a field on the TV, then reopen or reload Keyboard. Protected fields may not expose their contents. |
 | Done does not submit a TV search | Done closes the phone keyboard; it intentionally does not press a highlighted TV keyboard key. |
 
-Mute and Now Playing metadata are currently disabled. There is no media
-streaming, microphone access, or direct television-vendor integration. Volume
+Now Playing metadata is currently disabled. Siri, Subtitles, and InSight are not
+available because the protocol reference does not document their commands. There
+is no media streaming, microphone access, or direct television-vendor integration. Volume
 and TV power may depend on your Apple TV and HDMI-CEC setup. tvOS protocol
 changes can affect compatibility.
 

@@ -1,5 +1,6 @@
 package io.coreback.relayremote.protocol.companion
 
+import io.coreback.relayremote.protocol.AppleTvAccount
 import io.coreback.relayremote.protocol.AppleTvApp
 import io.coreback.relayremote.protocol.AppleTvClient
 import io.coreback.relayremote.protocol.AppleTvCommand
@@ -10,6 +11,7 @@ import io.coreback.relayremote.protocol.KeyboardOperation
 import io.coreback.relayremote.protocol.NowPlaying
 import io.coreback.relayremote.protocol.PairingCredentials
 import io.coreback.relayremote.protocol.PowerState
+import io.coreback.relayremote.protocol.ScanDirection
 import io.coreback.relayremote.protocol.TouchGesture
 import io.coreback.relayremote.protocol.UnsupportedCapabilityException
 import io.coreback.relayremote.protocol.discovery.ResolvedEndpoint
@@ -52,18 +54,28 @@ class CompanionAppleTvClient(
     private val secureRandom = SecureRandom()
     private val commandQueue = OrderedCommandQueue<suspend () -> Unit>(scope, 64) { it() }
     private val reconnectRunner = ReconnectRunner(retryPolicy)
+    private val input = CompanionInput(
+        channel = object : CompanionCommandChannel {
+            override suspend fun exchange(identifier: String, content: Map<String, Any?>) =
+                requireProtocol().exchange(identifier, content)
+
+            override suspend fun sendEvent(identifier: String, content: Map<String, Any?>) =
+                requireProtocol().sendEvent(identifier, content)
+        },
+    )
+    private val moveCoalescer = TouchMoveCoalescer()
 
     override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     override val capabilities: StateFlow<CapabilitySet> = _capabilities.asStateFlow()
     override val nowPlaying: StateFlow<NowPlaying?> = _nowPlaying.asStateFlow()
     override val powerState: StateFlow<PowerState> = _powerState.asStateFlow()
+    override val muted: StateFlow<Boolean> = input.muted
 
     @Volatile private var transport: CompanionFrameTransport? = null
     @Volatile private var protocol: CompanionProtocol? = null
     private var pendingPairing: PairingSession? = null
     private var pairingProtocol: CompanionProtocol? = null
     private var reconnectJob: Job? = null
-    private var touchEpochNanos = 0L
 
     override suspend fun connect() {
         reconnectJob?.cancel()
@@ -83,6 +95,7 @@ class CompanionAppleTvClient(
         reconnectJob?.cancel()
         reconnectJob = null
         commandQueue.invalidate()
+        resetInputState()
         protocol?.close()
         protocol = null
         transport = null
@@ -176,7 +189,9 @@ class CompanionAppleTvClient(
                 AppleTvCommand.LEFT -> press(HidButton.LEFT)
                 AppleTvCommand.RIGHT -> press(HidButton.RIGHT)
                 AppleTvCommand.SELECT -> press(HidButton.SELECT)
+                AppleTvCommand.SELECT_LONG_PRESS -> input.pressAndHold(HidButton.SELECT)
                 AppleTvCommand.BACK -> press(HidButton.MENU)
+                AppleTvCommand.BACK_LONG_PRESS -> input.pressAndHold(HidButton.MENU)
                 AppleTvCommand.HOME -> press(HidButton.HOME)
                 AppleTvCommand.HOME_LONG_PRESS -> press(HidButton.CONTROL_CENTER)
                 AppleTvCommand.HOME_DOUBLE_PRESS -> {
@@ -186,6 +201,10 @@ class CompanionAppleTvClient(
                 AppleTvCommand.PLAY_PAUSE -> press(HidButton.PLAY_PAUSE)
                 AppleTvCommand.PREVIOUS -> mediaControl(4)
                 AppleTvCommand.NEXT -> mediaControl(3)
+                AppleTvCommand.GUIDE -> press(HidButton.GUIDE)
+                AppleTvCommand.CHANNEL_UP -> press(HidButton.CHANNEL_UP)
+                AppleTvCommand.CHANNEL_DOWN -> press(HidButton.CHANNEL_DOWN)
+                AppleTvCommand.SCREENSAVER -> press(HidButton.SCREENSAVER)
             }
         }
     }
@@ -198,24 +217,51 @@ class CompanionAppleTvClient(
     }
 
     override suspend fun sendTouchGesture(gesture: TouchGesture) {
-        runQueued(Capability.TOUCH) {
-            when (gesture) {
-                is TouchGesture.Tap -> {
-                    press(HidButton.SELECT)
-                    sendTouch(gesture.x, gesture.y, 5)
+        when (gesture) {
+            is TouchGesture.Began -> {
+                moveCoalescer.startSwipe()
+                runQueued(Capability.TOUCH) {
+                    input.touch(gesture.x, gesture.y, CompanionInput.TOUCH_PRESS)
                 }
-                is TouchGesture.DoubleTap -> repeat(2) {
-                    press(HidButton.SELECT)
-                    sendTouch(gesture.x, gesture.y, 5)
-                    delay(20)
-                }
-                is TouchGesture.Hold -> {
-                    sendTouch(gesture.x, gesture.y, 1)
-                    delay(gesture.durationMillis.coerceIn(1, 2_000))
-                    sendTouch(gesture.x, gesture.y, 4)
-                }
-                is TouchGesture.Swipe -> swipe(gesture)
             }
+            is TouchGesture.Moved -> sendCoalescedMove(gesture)
+            is TouchGesture.Ended -> runQueuedReliably(Capability.TOUCH) {
+                input.touch(gesture.x, gesture.y, CompanionInput.TOUCH_RELEASE)
+            }
+            TouchGesture.HoldStarted -> runQueued(Capability.SELECT) { input.beginSelectHold() }
+            TouchGesture.HoldEnded -> runQueuedReliably(Capability.SELECT) { input.endSelectHold() }
+        }
+    }
+
+    private suspend fun sendCoalescedMove(gesture: TouchGesture.Moved) {
+        val pending = moveCoalescer.offer(gesture) ?: return
+        try {
+            runQueued(Capability.TOUCH) {
+                pending.take()?.let { latest ->
+                    input.touch(latest.x, latest.y, CompanionInput.TOUCH_HOLD)
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Throwable) {
+            // A lost position is harmless, and the touch's end reports any real failure.
+            pending.take()
+        }
+    }
+
+    override suspend fun setScan(direction: ScanDirection, active: Boolean) {
+        val capability = when (direction) {
+            ScanDirection.FAST_FORWARD -> Capability.FAST_FORWARD
+            ScanDirection.REWIND -> Capability.REWIND
+        }
+        val action: suspend () -> Unit = {
+            requireProtocol().exchange("_mcc", CompanionCommandEncoder.scan(direction, active))
+        }
+        when {
+            active -> runQueued(capability, action)
+            // An app can withdraw scanning mid-hold, and a running scan must still be stopped.
+            // Without a connection there is nothing to stop.
+            protocol != null -> runQueuedReliably(capability = null, action)
         }
     }
 
@@ -236,6 +282,29 @@ class CompanionAppleTvClient(
         require(bundleId.isNotBlank())
         runQueued(Capability.APPS) {
             requireProtocol().exchange("_launchApp", mapOf("_bundleID" to bundleId))
+        }
+    }
+
+    override suspend fun listAccounts(): List<AppleTvAccount> {
+        var result = emptyList<AppleTvAccount>()
+        runQueued(Capability.ACCOUNTS) {
+            result = requireProtocol()
+                .exchange("FetchUserAccountsEvent", emptyMap())
+                .mapNotNull { (id, value) ->
+                    (value as? String)?.let { AppleTvAccount(id, it) }
+                }
+                .sortedBy { it.name.lowercase() }
+        }
+        return result
+    }
+
+    override suspend fun switchAccount(accountId: String) {
+        require(accountId.isNotBlank())
+        runQueued(Capability.ACCOUNTS) {
+            requireProtocol().exchange(
+                "SwitchUserAccountEvent",
+                CompanionCommandEncoder.switchAccount(accountId),
+            )
         }
     }
 
@@ -304,15 +373,21 @@ class CompanionAppleTvClient(
     }
 
     override suspend fun volumeUp() {
-        runQueued(Capability.VOLUME) { press(HidButton.VOLUME_UP) }
+        runQueued(Capability.VOLUME) {
+            press(HidButton.VOLUME_UP)
+            input.volumeChangedByUser()
+        }
     }
 
     override suspend fun volumeDown() {
-        runQueued(Capability.VOLUME) { press(HidButton.VOLUME_DOWN) }
+        runQueued(Capability.VOLUME) {
+            press(HidButton.VOLUME_DOWN)
+            input.volumeChangedByUser()
+        }
     }
 
     override suspend fun mute() {
-        throw UnsupportedCapabilityException(Capability.MUTE)
+        runQueued(Capability.MUTE) { input.toggleMute() }
     }
 
     private suspend fun connectAuthenticated() {
@@ -320,6 +395,7 @@ class CompanionAppleTvClient(
         protocol = null
         transport = null
         commandQueue.invalidate()
+        resetInputState()
         _connectionState.value = ConnectionState.Connecting
         val credentials = credentialsProvider() ?: throw PairingRequiredException()
         val endpoint = endpointResolver()
@@ -388,7 +464,7 @@ class CompanionAppleTvClient(
                 "name" to "Relay Remote",
             ),
         )
-        touchEpochNanos = System.nanoTime()
+        input.startTouchClock()
         activeProtocol.exchange(
             "_touchStart",
             mapOf("_height" to 1000.0, "_tFl" to 0L, "_width" to 1000.0),
@@ -462,61 +538,49 @@ class CompanionAppleTvClient(
         }
     }
 
-    private suspend fun press(button: HidButton) {
-        requireProtocol().exchange("_hidC", CompanionCommandEncoder.hid(button, true))
-        requireProtocol().exchange("_hidC", CompanionCommandEncoder.hid(button, false))
+    private suspend fun press(button: HidButton) = input.press(button)
+
+    private fun resetInputState() {
+        moveCoalescer.startSwipe()
+        input.resetSession()
     }
 
     private suspend fun mediaControl(command: Long, args: Map<String, Any?> = emptyMap()) {
         requireProtocol().exchange("_mcc", mapOf("_mcc" to command) + args)
     }
 
-    private suspend fun sendTouch(x: Float, y: Float, phase: Long) {
-        val point = CompanionCommandEncoder.touchPoint(x, y)
-        requireProtocol().sendEvent(
-            "_hidT",
-            mapOf(
-                "_ns" to (System.nanoTime() - touchEpochNanos).coerceAtLeast(0),
-                "_tFg" to 1L,
-                "_cx" to point.first.toLong(),
-                "_tPh" to phase,
-                "_cy" to point.second.toLong(),
-            ),
-        )
-    }
-
-    private suspend fun swipe(gesture: TouchGesture.Swipe) {
-        val duration = gesture.durationMillis.coerceIn(16, 2_000)
-        sendTouch(gesture.startX, gesture.startY, 1)
-        val steps = (duration / 16).coerceAtLeast(1)
-        for (step in 1 until steps) {
-            val progress = step.toFloat() / steps
-            sendTouch(
-                gesture.startX + (gesture.endX - gesture.startX) * progress,
-                gesture.startY + (gesture.endY - gesture.startY) * progress,
-                3,
-            )
-            delay(16)
-        }
-        sendTouch(gesture.endX, gesture.endY, 4)
-    }
-
+    /** A null [capability] is only for releasing something that was already started. */
     private suspend fun runQueued(
-        capability: Capability,
+        capability: Capability?,
         action: suspend () -> Unit,
     ) {
-        if (!_capabilities.value.supports(capability)) {
+        if (capability != null && !_capabilities.value.supports(capability)) {
             throw UnsupportedCapabilityException(capability)
         }
         when (val result = commandQueue.enqueue(action).await()) {
             CommandResult.Executed -> Unit
-            CommandResult.DroppedStale -> throw IllegalStateException("Command expired after disconnect")
-            CommandResult.RejectedFull -> throw IllegalStateException("Too many queued remote commands")
+            CommandResult.DroppedStale -> throw IllegalStateException("That command was not sent because the connection dropped.")
+            CommandResult.RejectedFull -> throw CommandQueueFullException()
             is CommandResult.Failed -> {
                 scheduleReconnect()
                 throw result.error
             }
         }
+    }
+
+    /** For releases: a press left down must not be lost because the queue is briefly full. */
+    private suspend fun runQueuedReliably(
+        capability: Capability?,
+        action: suspend () -> Unit,
+    ) {
+        repeat(RELEASE_RETRIES) {
+            try {
+                return runQueued(capability, action)
+            } catch (_: CommandQueueFullException) {
+                delay(RELEASE_RETRY_DELAY_MILLIS)
+            }
+        }
+        runQueued(capability, action)
     }
 
     private fun scheduleReconnect() {
@@ -558,21 +622,34 @@ class CompanionAppleTvClient(
         AppleTvCommand.LEFT,
         AppleTvCommand.RIGHT,
         -> Capability.NAVIGATION
-        AppleTvCommand.SELECT -> Capability.SELECT
-        AppleTvCommand.BACK -> Capability.BACK
+        AppleTvCommand.SELECT,
+        AppleTvCommand.SELECT_LONG_PRESS,
+        -> Capability.SELECT
+        AppleTvCommand.BACK,
+        AppleTvCommand.BACK_LONG_PRESS,
+        -> Capability.BACK
         AppleTvCommand.HOME -> Capability.HOME
         AppleTvCommand.HOME_LONG_PRESS -> Capability.HOME_LONG_PRESS
         AppleTvCommand.HOME_DOUBLE_PRESS -> Capability.HOME_DOUBLE_PRESS
         AppleTvCommand.PLAY_PAUSE -> Capability.PLAY_PAUSE
         AppleTvCommand.PREVIOUS -> Capability.PREVIOUS
         AppleTvCommand.NEXT -> Capability.NEXT
+        AppleTvCommand.GUIDE,
+        AppleTvCommand.CHANNEL_UP,
+        AppleTvCommand.CHANNEL_DOWN,
+        -> Capability.CHANNELS
+        AppleTvCommand.SCREENSAVER -> Capability.SCREENSAVER
     }
 
     private class PairingRequiredException : IllegalStateException()
 
+    private class CommandQueueFullException :
+        IllegalStateException("Too many queued remote commands")
+
     private companion object {
-        val IMPLEMENTED_CAPABILITIES = Capability.entries.toSet() -
-            setOf(Capability.MUTE, Capability.NOW_PLAYING)
+        const val RELEASE_RETRIES = 20
+        const val RELEASE_RETRY_DELAY_MILLIS = 100L
+        val IMPLEMENTED_CAPABILITIES = Capability.entries.toSet() - Capability.NOW_PLAYING
         val DYNAMIC_CAPABILITIES = setOf(Capability.KEYBOARD)
         val BASE_CAPABILITIES = setOf(
             Capability.NAVIGATION,
@@ -586,6 +663,9 @@ class CompanionAppleTvClient(
             Capability.SLEEP,
             Capability.TOUCH,
             Capability.APPS,
+            Capability.CHANNELS,
+            Capability.SCREENSAVER,
+            Capability.ACCOUNTS,
         )
     }
 }

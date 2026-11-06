@@ -6,16 +6,20 @@ import io.coreback.relayremote.data.DeviceStoreDataSource
 import io.coreback.relayremote.data.SecretKeyProvider
 import io.coreback.relayremote.data.proto.DeviceStore
 import io.coreback.relayremote.devices.AppleTvDiscovery
+import io.coreback.relayremote.protocol.AppleTvAccount
 import io.coreback.relayremote.protocol.AppleTvApp
 import io.coreback.relayremote.protocol.AppleTvClient
 import io.coreback.relayremote.protocol.AppleTvCommand
+import io.coreback.relayremote.protocol.Capability
 import io.coreback.relayremote.protocol.CapabilitySet
 import io.coreback.relayremote.protocol.ConnectionState
 import io.coreback.relayremote.protocol.KeyboardOperation
 import io.coreback.relayremote.protocol.NowPlaying
 import io.coreback.relayremote.protocol.PairingCredentials
 import io.coreback.relayremote.protocol.PowerState
+import io.coreback.relayremote.protocol.ScanDirection
 import io.coreback.relayremote.protocol.TouchGesture
+import io.coreback.relayremote.protocol.UnsupportedCapabilityException
 import io.coreback.relayremote.protocol.discovery.DiscoveredAppleTv
 import io.coreback.relayremote.protocol.discovery.ResolvedEndpoint
 import io.coreback.relayremote.protocol.discovery.ServiceKind
@@ -612,6 +616,173 @@ class RemoteViewModelTest {
         assertFalse(repository.settings.value().devices.single().paired)
     }
 
+    private fun connectedDevice(
+        client: FakeAppleTvClient,
+    ): Pair<DeviceRepository, DiscoveredAppleTv> {
+        client.mutableConnectionState.value = ConnectionState.Connected
+        client.mutableCapabilities.value = CapabilitySet(
+            implemented = Capability.entries.toSet(),
+            available = Capability.entries.toSet(),
+        )
+        return repository(FakeDeviceStoreDataSource()) to discoveredDevice()
+    }
+
+    @Test
+    fun `touch gestures reach the client in the order they happened`() = runTest(dispatcher) {
+        val client = FakeAppleTvClient()
+        val (repository, device) = connectedDevice(client)
+        repository.upsert(device)
+        repository.select(device.id)
+        val viewModel = RemoteViewModel(FakeAppleTvDiscovery(listOf(device)), repository) { client }
+        advanceUntilIdle()
+
+        viewModel.touch(TouchGesture.Began(0.5f, 0.5f))
+        viewModel.touch(TouchGesture.Moved(0.6f, 0.5f))
+        viewModel.touch(TouchGesture.Ended(0.7f, 0.5f))
+        viewModel.touch(TouchGesture.HoldStarted)
+        viewModel.touch(TouchGesture.HoldEnded)
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(
+                TouchGesture.Began(0.5f, 0.5f),
+                TouchGesture.Moved(0.6f, 0.5f),
+                TouchGesture.Ended(0.7f, 0.5f),
+                TouchGesture.HoldStarted,
+                TouchGesture.HoldEnded,
+            ),
+            client.touchGestures,
+        )
+    }
+
+    @Test
+    fun `failed hold start is reported but its release stays quiet`() = runTest(dispatcher) {
+        val client = FakeAppleTvClient()
+        val (repository, device) = connectedDevice(client)
+        repository.upsert(device)
+        repository.select(device.id)
+        val viewModel = RemoteViewModel(FakeAppleTvDiscovery(listOf(device)), repository) { client }
+        advanceUntilIdle()
+        client.touchError = UnsupportedCapabilityException(Capability.SELECT)
+
+        viewModel.touch(TouchGesture.HoldEnded)
+        advanceUntilIdle()
+        assertEquals(null, viewModel.uiState.value.error)
+
+        viewModel.touch(TouchGesture.HoldStarted)
+        advanceUntilIdle()
+        assertEquals("That control is not available right now.", viewModel.uiState.value.error)
+    }
+
+    @Test
+    fun `failed scan stop stays quiet and failed scan start is reported`() = runTest(dispatcher) {
+        val client = FakeAppleTvClient()
+        val (repository, device) = connectedDevice(client)
+        repository.upsert(device)
+        repository.select(device.id)
+        val viewModel = RemoteViewModel(FakeAppleTvDiscovery(listOf(device)), repository) { client }
+        advanceUntilIdle()
+        client.scanError = IllegalStateException("boom")
+
+        viewModel.scan(ScanDirection.REWIND, active = false)
+        advanceUntilIdle()
+        assertEquals(null, viewModel.uiState.value.error)
+
+        viewModel.scan(ScanDirection.REWIND, active = true)
+        advanceUntilIdle()
+        assertEquals("boom", viewModel.uiState.value.error)
+        assertEquals(
+            listOf(ScanDirection.REWIND to false, ScanDirection.REWIND to true),
+            client.scans,
+        )
+    }
+
+    @Test
+    fun `apps load when connected and favorites follow the installed list`() = runTest(dispatcher) {
+        val client = FakeAppleTvClient()
+        client.apps = listOf(AppleTvApp("com.b", "Beta"), AppleTvApp("com.a", "Alpha"))
+        val (repository, device) = connectedDevice(client)
+        repository.upsert(device)
+        repository.select(device.id)
+        repository.setFavorite(device.id, "com.a", true)
+        repository.setFavorite(device.id, "com.removed", true)
+
+        val viewModel = RemoteViewModel(FakeAppleTvDiscovery(listOf(device)), repository) { client }
+        advanceUntilIdle()
+
+        assertEquals(listOf(AppleTvApp("com.a", "Alpha")), viewModel.uiState.value.favoriteApps)
+    }
+
+    @Test
+    fun `switching profile uses the chosen account and closes the sheet`() = runTest(dispatcher) {
+        val client = FakeAppleTvClient()
+        client.accounts = listOf(AppleTvAccount("1", "Sam"), AppleTvAccount("2", "Noor"))
+        val (repository, device) = connectedDevice(client)
+        repository.upsert(device)
+        repository.select(device.id)
+        val viewModel = RemoteViewModel(FakeAppleTvDiscovery(listOf(device)), repository) { client }
+        advanceUntilIdle()
+
+        viewModel.openSheet(RemoteSheet.MORE)
+        advanceUntilIdle()
+        assertEquals(client.accounts, viewModel.uiState.value.accounts)
+
+        viewModel.switchAccount("2")
+        advanceUntilIdle()
+
+        assertEquals(listOf("2"), client.switchedAccounts)
+        assertEquals(RemoteSheet.NONE, viewModel.uiState.value.sheet)
+    }
+
+    @Test
+    fun `muted state follows the client`() = runTest(dispatcher) {
+        val client = FakeAppleTvClient()
+        val (repository, device) = connectedDevice(client)
+        repository.upsert(device)
+        repository.select(device.id)
+        val viewModel = RemoteViewModel(FakeAppleTvDiscovery(listOf(device)), repository) { client }
+        advanceUntilIdle()
+
+        client.mutableMuted.value = true
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.muted)
+    }
+
+    @Test
+    fun `directional buttons setting persists`() = runTest(dispatcher) {
+        val repository = repository(FakeDeviceStoreDataSource())
+        val viewModel = RemoteViewModel(FakeAppleTvDiscovery(emptyList()), repository) { FakeAppleTvClient() }
+        advanceUntilIdle()
+
+        viewModel.setDirectionalButtons(true)
+        advanceUntilIdle()
+
+        assertTrue(viewModel.uiState.value.directionalButtons)
+        assertTrue(repository.settings.value().directionalButtons)
+    }
+
+    @Test
+    fun `reconnecting clears a stale command error`() = runTest(dispatcher) {
+        val client = FakeAppleTvClient()
+        val (repository, device) = connectedDevice(client)
+        repository.upsert(device)
+        repository.select(device.id)
+        val viewModel = RemoteViewModel(FakeAppleTvDiscovery(listOf(device)), repository) { client }
+        advanceUntilIdle()
+        client.mutableConnectionState.value = ConnectionState.Reconnecting(1)
+        advanceUntilIdle()
+        client.scanError = IllegalStateException("boom")
+        viewModel.scan(ScanDirection.REWIND, active = true)
+        advanceUntilIdle()
+        assertEquals("boom", viewModel.uiState.value.error)
+
+        client.mutableConnectionState.value = ConnectionState.Connected
+        advanceUntilIdle()
+
+        assertEquals(null, viewModel.uiState.value.error)
+    }
+
     @Test
     fun `paired device missing from discovery remains paired and offline`() = runTest(dispatcher) {
         val source = FakeDeviceStoreDataSource()
@@ -680,6 +851,15 @@ private class FakeAppleTvClient(
     override val capabilities: StateFlow<CapabilitySet> = mutableCapabilities
     override val nowPlaying: StateFlow<NowPlaying?> = MutableStateFlow(null)
     override val powerState: StateFlow<PowerState> = MutableStateFlow(PowerState.UNKNOWN)
+    val mutableMuted = MutableStateFlow(false)
+    override val muted: StateFlow<Boolean> = mutableMuted
+    val touchGestures = mutableListOf<TouchGesture>()
+    val scans = mutableListOf<Pair<ScanDirection, Boolean>>()
+    val switchedAccounts = mutableListOf<String>()
+    var touchError: Throwable? = null
+    var scanError: Throwable? = null
+    var apps: List<AppleTvApp> = emptyList()
+    var accounts: List<AppleTvAccount> = emptyList()
     var connectCalls = 0
     var pairCalls = 0
     val keyboardOperations = mutableListOf<KeyboardOperation>()
@@ -711,9 +891,20 @@ private class FakeAppleTvClient(
 
     override suspend fun sendCommand(command: AppleTvCommand) = Unit
     override suspend fun skipBy(seconds: Int) = Unit
-    override suspend fun sendTouchGesture(gesture: TouchGesture) = Unit
-    override suspend fun listApps(): List<AppleTvApp> = emptyList()
+    override suspend fun sendTouchGesture(gesture: TouchGesture) {
+        touchGestures += gesture
+        touchError?.let { throw it }
+    }
+    override suspend fun setScan(direction: ScanDirection, active: Boolean) {
+        scans += direction to active
+        scanError?.let { throw it }
+    }
+    override suspend fun listApps(): List<AppleTvApp> = apps
     override suspend fun launchApp(bundleId: String) = Unit
+    override suspend fun listAccounts(): List<AppleTvAccount> = accounts
+    override suspend fun switchAccount(accountId: String) {
+        switchedAccounts += accountId
+    }
     override suspend fun getKeyboardText(): String? {
         keyboardGetCalls += 1
         keyboardGetError?.let { throw it }
