@@ -922,12 +922,14 @@ private fun QuickAction(
         color = if (highlighted) RelayCyan.copy(alpha = 0.14f) else RelayCarbon,
         contentColor = accent,
     ) {
-        Row(
-            Modifier.padding(horizontal = 13.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        // Stacked, because a side-by-side icon leaves too little room for "Keyboard" on a phone.
+        Column(
+            Modifier.padding(horizontal = 6.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             RemoteIconGraphic(icon, accent, Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
                 label,
                 style = MaterialTheme.typography.labelLarge,
