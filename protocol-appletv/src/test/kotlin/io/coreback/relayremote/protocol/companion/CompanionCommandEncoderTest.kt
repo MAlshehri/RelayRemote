@@ -1,6 +1,7 @@
 package io.coreback.relayremote.protocol.companion
 
 import io.coreback.relayremote.protocol.Capability
+import io.coreback.relayremote.protocol.ScanDirection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -29,7 +30,7 @@ class CompanionCommandEncoderTest {
         assertTrue(Capability.VOLUME in capabilities)
         assertTrue(Capability.SKIP_FORWARD in capabilities)
         assertFalse(Capability.SKIP_BACKWARD in capabilities)
-        assertFalse(Capability.MUTE in capabilities)
+        assertTrue(Capability.MUTE in capabilities)
         assertFalse(Capability.NEXT in capabilities)
     }
 
@@ -48,6 +49,51 @@ class CompanionCommandEncoderTest {
         )
         assertFalse(
             Capability.SKIP_BACKWARD in CompanionCommandEncoder.mediaCapabilities(0x0040),
+        )
+    }
+
+    @Test
+    fun `pyatv scan flags enable each direction`() {
+        assertEquals(setOf(Capability.FAST_FORWARD), CompanionCommandEncoder.mediaCapabilities(0x0010))
+        assertEquals(setOf(Capability.REWIND), CompanionCommandEncoder.mediaCapabilities(0x0020))
+    }
+
+    @Test
+    fun `new buttons use pyatv referenced hid codes`() {
+        assertEquals(11L, HidButton.SCREENSAVER.code)
+        assertEquals(15L, HidButton.CHANNEL_UP.code)
+        assertEquals(16L, HidButton.CHANNEL_DOWN.code)
+        assertEquals(17L, HidButton.GUIDE.code)
+        assertEquals(19L, HidButton.CONTROL_CENTER.code)
+    }
+
+    @Test
+    fun `scan pairs each start with its own stop command`() {
+        assertEquals(
+            mapOf("_mcc" to 8L),
+            CompanionCommandEncoder.scan(ScanDirection.FAST_FORWARD, active = true),
+        )
+        assertEquals(
+            mapOf("_mcc" to 9L),
+            CompanionCommandEncoder.scan(ScanDirection.FAST_FORWARD, active = false),
+        )
+        assertEquals(
+            mapOf("_mcc" to 10L),
+            CompanionCommandEncoder.scan(ScanDirection.REWIND, active = true),
+        )
+        assertEquals(
+            mapOf("_mcc" to 11L),
+            CompanionCommandEncoder.scan(ScanDirection.REWIND, active = false),
+        )
+    }
+
+    @Test
+    fun `volume and account payloads use pyatv keys`() {
+        assertEquals(mapOf("_mcc" to 5L), CompanionCommandEncoder.getVolume())
+        assertEquals(mapOf("_mcc" to 6L, "_vol" to 1.0), CompanionCommandEncoder.setVolume(1.4))
+        assertEquals(
+            mapOf("SwitchAccountID" to "abc"),
+            CompanionCommandEncoder.switchAccount("abc"),
         )
     }
 

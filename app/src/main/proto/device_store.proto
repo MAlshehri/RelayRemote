@@ -10,6 +10,7 @@ message DeviceStore {
   string selected_device_id = 2;
   bool keep_screen_awake = 3;
   uint32 skip_seconds = 4;
+  bool directional_buttons = 5;
 }
 
 message SavedDevice {

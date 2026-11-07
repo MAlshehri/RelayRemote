@@ -1,5 +1,6 @@
 package io.coreback.relayremote.remote
 
+import io.coreback.relayremote.protocol.AppleTvAccount
 import io.coreback.relayremote.protocol.AppleTvApp
 import io.coreback.relayremote.protocol.Capability
 import io.coreback.relayremote.protocol.CapabilitySet
@@ -49,6 +50,8 @@ data class RemoteUiState(
     val apps: List<AppleTvApp> = emptyList(),
     val favoriteBundleIds: Set<String> = emptySet(),
     val appsLoading: Boolean = false,
+    val accounts: List<AppleTvAccount> = emptyList(),
+    val muted: Boolean = false,
     val discoveryRefreshing: Boolean = true,
     val discoveryFailure: String? = null,
     val connectionRetrying: Boolean = false,
@@ -61,11 +64,18 @@ data class RemoteUiState(
     val keyboardError: String? = null,
     val keepScreenAwake: Boolean = true,
     val skipSeconds: Int = 30,
+    val directionalButtons: Boolean = false,
     val confirmation: String? = null,
     val error: String? = null,
 ) {
     val selectedDevice: DeviceItem?
         get() = devices.firstOrNull { it.id == selectedDeviceId }
+
+    /** Favorites this Apple TV still has installed, in name order. */
+    val favoriteApps: List<AppleTvApp>
+        get() = apps
+            .filter { it.bundleId in favoriteBundleIds }
+            .sortedBy { it.name.lowercase() }
 
     fun controlEnabled(capability: Capability): Boolean =
         connectionState == ConnectionState.Connected && capabilities.supports(capability)

@@ -11,8 +11,12 @@ import io.coreback.relayremote.protocol.AppleTvClient
 import io.coreback.relayremote.protocol.AppleTvCommand
 import io.coreback.relayremote.protocol.Capability
 import io.coreback.relayremote.protocol.KeyboardOperation
+import io.coreback.relayremote.protocol.ScanDirection
 import io.coreback.relayremote.protocol.TouchGesture
+import io.coreback.relayremote.protocol.UnsupportedCapabilityException
+import io.coreback.relayremote.protocol.session.CompanionProtocolException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -99,6 +103,7 @@ class RemoteViewModel(
                             .orEmpty(),
                         keepScreenAwake = settings.keepScreenAwake,
                         skipSeconds = settings.skipSeconds,
+                        directionalButtons = settings.directionalButtons,
                     )
                 }
                 if (settings.selectedDeviceId != activeDeviceId) {
@@ -154,6 +159,7 @@ class RemoteViewModel(
     fun openSheet(sheet: RemoteSheet) {
         _uiState.update { it.copy(sheet = sheet) }
         if (sheet == RemoteSheet.APPS) loadApps()
+        if (sheet == RemoteSheet.MORE) loadAccounts()
         if (sheet == RemoteSheet.KEYBOARD) {
             _uiState.update {
                 it.copy(
@@ -410,8 +416,20 @@ class RemoteViewModel(
     fun skipBy(seconds: Int) = action { skipBy(seconds) }
 
     fun touch(gesture: TouchGesture) {
+        val isRelease = gesture is TouchGesture.Ended || gesture == TouchGesture.HoldEnded
         viewModelScope.launch {
-            runCatching { requireClient().sendTouchGesture(gesture) }.onFailure(::showError)
+            runCatching { requireClient().sendTouchGesture(gesture) }
+                .onFailure { error ->
+                    // The start of the gesture already reported a lost connection.
+                    if (!isRelease) showError(error)
+                }
+        }
+    }
+
+    fun scan(direction: ScanDirection, active: Boolean) {
+        viewModelScope.launch {
+            runCatching { requireClient().setScan(direction, active) }
+                .onFailure { error -> if (active) showError(error) }
         }
     }
 
@@ -430,6 +448,17 @@ class RemoteViewModel(
             runCatching {
                 requireClient().launchApp(bundleId)
                 closeSheet()
+            }.onFailure(::showError)
+        }
+    }
+
+    fun switchAccount(accountId: String) {
+        val name = _uiState.value.accounts.firstOrNull { it.id == accountId }?.name
+        viewModelScope.launch {
+            runCatching {
+                requireClient().switchAccount(accountId)
+                closeSheet()
+                showConfirmation(if (name != null) "Switched to $name" else "Profile switched")
             }.onFailure(::showError)
         }
     }
@@ -460,6 +489,12 @@ class RemoteViewModel(
     fun setKeepScreenAwake(enabled: Boolean) {
         viewModelScope.launch {
             runCatching { repository.setKeepScreenAwake(enabled) }.onFailure(::showError)
+        }
+    }
+
+    fun setDirectionalButtons(enabled: Boolean) {
+        viewModelScope.launch {
+            runCatching { repository.setDirectionalButtons(enabled) }.onFailure(::showError)
         }
     }
 
@@ -499,6 +534,10 @@ class RemoteViewModel(
                 )
             }
         }
+        if (deviceId != activeDeviceId) {
+            // Another Apple TV has its own apps and profiles.
+            _uiState.update { it.copy(apps = emptyList(), accounts = emptyList(), muted = false) }
+        }
         activeDeviceId = deviceId
         activeCanReconnect = paired
         clientStateJob?.cancel()
@@ -525,11 +564,15 @@ class RemoteViewModel(
                 selectedClient.capabilities,
                 selectedClient.powerState,
                 selectedClient.nowPlaying,
-            ) { connection, capabilities, power, nowPlaying ->
-                arrayOf(connection, capabilities, power, nowPlaying)
+                selectedClient.muted,
+            ) { connection, capabilities, power, nowPlaying, muted ->
+                arrayOf(connection, capabilities, power, nowPlaying, muted)
             }.collect { values ->
                 val connection = values[0] as io.coreback.relayremote.protocol.ConnectionState
                 val capabilities = values[1] as io.coreback.relayremote.protocol.CapabilitySet
+                val justConnected =
+                    connection == io.coreback.relayremote.protocol.ConnectionState.Connected &&
+                        _uiState.value.connectionState != connection
                 _uiState.update {
                     val keyboardBecameUnavailable = it.sheet == RemoteSheet.KEYBOARD &&
                         it.keyboardSyncState != KeyboardSyncState.LOADING &&
@@ -541,6 +584,8 @@ class RemoteViewModel(
                         capabilities = capabilities,
                         powerState = values[2] as io.coreback.relayremote.protocol.PowerState,
                         nowPlaying = values[3] as io.coreback.relayremote.protocol.NowPlaying?,
+                        muted = values[4] as Boolean,
+                        error = if (justConnected) null else it.error,
                         keyboardSyncState = if (keyboardBecameUnavailable) {
                             KeyboardSyncState.UNAVAILABLE
                         } else {
@@ -557,6 +602,7 @@ class RemoteViewModel(
                         },
                     )
                 }
+                if (justConnected) loadApps(quiet = true)
                 val current = _uiState.value
                 if (current.sheet == RemoteSheet.KEYBOARD &&
                     !current.keyboardDirty &&
@@ -576,14 +622,30 @@ class RemoteViewModel(
         }
     }
 
-    private fun loadApps() {
+    /** [quiet] loads run without being asked, so a failure there is not worth interrupting for. */
+    private fun loadApps(quiet: Boolean = false) {
         if (!_uiState.value.controlEnabled(Capability.APPS)) return
+        val deviceId = activeDeviceId
         viewModelScope.launch {
             _uiState.update { it.copy(appsLoading = true) }
             runCatching { requireClient().listApps() }
-                .onSuccess { apps -> _uiState.update { it.copy(apps = apps) } }
-                .onFailure(::showError)
+                .onSuccess { apps ->
+                    if (deviceId == activeDeviceId) _uiState.update { it.copy(apps = apps) }
+                }
+                .onFailure { error -> if (!quiet) showError(error) }
             _uiState.update { it.copy(appsLoading = false) }
+        }
+    }
+
+    private fun loadAccounts() {
+        if (!_uiState.value.controlEnabled(Capability.ACCOUNTS)) return
+        val deviceId = activeDeviceId
+        viewModelScope.launch {
+            // Not every Apple TV has profiles, so a failure only hides the section.
+            runCatching { requireClient().listAccounts() }
+                .onSuccess { accounts ->
+                    if (deviceId == activeDeviceId) _uiState.update { it.copy(accounts = accounts) }
+                }
         }
     }
 
@@ -616,9 +678,15 @@ class RemoteViewModel(
     }
 
     private fun showError(error: Throwable) {
-        _uiState.update {
-            it.copy(error = error.message ?: "The Apple TV did not respond.")
-        }
+        _uiState.update { it.copy(error = userMessage(error)) }
+    }
+
+    private fun userMessage(error: Throwable): String = when (error) {
+        is TimeoutCancellationException ->
+            "Apple TV did not respond. Check that it is awake and on this network."
+        is UnsupportedCapabilityException -> "That control is not available right now."
+        is CompanionProtocolException -> "Apple TV could not do that right now."
+        else -> error.message ?: "Apple TV did not respond."
     }
 
     private fun keyboardErrorMessage(@Suppress("UNUSED_PARAMETER") error: Throwable): String =

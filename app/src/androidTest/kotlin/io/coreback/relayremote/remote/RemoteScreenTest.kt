@@ -1,6 +1,8 @@
 package io.coreback.relayremote.remote
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertCountEquals
@@ -11,16 +13,27 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.longClick
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.runtime.Composable
+import io.coreback.relayremote.protocol.AppleTvAccount
+import io.coreback.relayremote.protocol.AppleTvApp
 import io.coreback.relayremote.protocol.AppleTvCommand
 import io.coreback.relayremote.protocol.Capability
 import io.coreback.relayremote.protocol.CapabilitySet
 import io.coreback.relayremote.protocol.ConnectionState
 import io.coreback.relayremote.protocol.PowerState
+import io.coreback.relayremote.protocol.ScanDirection
 import io.coreback.relayremote.protocol.NowPlaying
 import io.coreback.relayremote.protocol.TouchGesture
 import io.coreback.relayremote.ui.RelayRemoteTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
@@ -474,7 +487,8 @@ class RemoteScreenTest {
             )
         }
 
-        compose.onNodeWithText("Forget this Apple TV").performScrollTo().performClick()
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Forget this Apple TV"))
+        compose.onNodeWithText("Forget this Apple TV").performClick()
         compose.onNodeWithText("Forget Living Room?").assertIsDisplayed()
         assertEquals(null, forgotten)
         compose.onNodeWithText("Forget").performClick()
@@ -521,6 +535,338 @@ class RemoteScreenTest {
         compose.onNodeWithText("Foundation").assertIsDisplayed()
         compose.onNodeWithText("Playing").assertIsDisplayed()
     }
+
+    private val allControls = CapabilitySet(
+        implemented = Capability.entries.toSet(),
+        available = Capability.entries.toSet(),
+    )
+
+    private fun connectedState() = RemoteUiState(
+        selectedDeviceId = "tv",
+        selectedDeviceName = "Living Room",
+        connectionState = ConnectionState.Connected,
+        powerState = PowerState.ON,
+        capabilities = allControls,
+    )
+
+    private fun setRecordingScreen(
+        state: RemoteUiState,
+        commands: MutableList<AppleTvCommand> = mutableListOf(),
+        touches: MutableList<TouchGesture> = mutableListOf(),
+    ) {
+        compose.setContent {
+            TestRemoteScreen(
+                state = state,
+                onCommand = { commands += it },
+                onTouch = { touches += it },
+            )
+        }
+    }
+
+    @Test
+    fun touchpadTapSelectsImmediatelyWithoutTouchEvents() {
+        val commands = mutableListOf<AppleTvCommand>()
+        val touches = mutableListOf<TouchGesture>()
+        setRecordingScreen(connectedState(), commands, touches)
+
+        compose.onNodeWithTag("Touchpad").performTouchInput { click(center) }
+
+        compose.runOnIdle {
+            assertEquals(listOf(AppleTvCommand.SELECT), commands)
+            assertEquals(emptyList<TouchGesture>(), touches)
+        }
+    }
+
+    @Test
+    fun touchpadHoldPressesSelectUntilTheFingerLifts() {
+        val commands = mutableListOf<AppleTvCommand>()
+        val touches = mutableListOf<TouchGesture>()
+        setRecordingScreen(connectedState(), commands, touches)
+
+        compose.onNodeWithTag("Touchpad").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(REMOTE_HOLD_MILLIS + 50)
+        compose.runOnIdle { assertEquals(listOf<TouchGesture>(TouchGesture.HoldStarted), touches) }
+
+        compose.onNodeWithTag("Touchpad").performTouchInput { up() }
+
+        compose.runOnIdle {
+            assertEquals(
+                listOf(TouchGesture.HoldStarted, TouchGesture.HoldEnded),
+                touches,
+            )
+            assertEquals(emptyList<AppleTvCommand>(), commands)
+        }
+    }
+
+    @Test
+    fun touchpadSwipeStreamsLiveAndEndsWhereTheFingerLifts() {
+        val commands = mutableListOf<AppleTvCommand>()
+        val touches = mutableListOf<TouchGesture>()
+        setRecordingScreen(connectedState(), commands, touches)
+
+        compose.onNodeWithTag("Touchpad").performTouchInput {
+            down(center)
+            moveBy(androidx.compose.ui.geometry.Offset(120f, 0f))
+        }
+        compose.runOnIdle {
+            assertTrue(touches.first() is TouchGesture.Began)
+            assertFalse(touches.any { it is TouchGesture.Ended })
+        }
+
+        compose.onNodeWithTag("Touchpad").performTouchInput { up() }
+
+        compose.runOnIdle {
+            assertTrue(touches.last() is TouchGesture.Ended)
+            assertFalse(touches.contains(TouchGesture.HoldStarted))
+            assertEquals(emptyList<AppleTvCommand>(), commands)
+        }
+    }
+
+    @Test
+    fun touchpadEdgeTapMovesOneStep() {
+        val commands = mutableListOf<AppleTvCommand>()
+        setRecordingScreen(connectedState(), commands)
+
+        compose.onNodeWithTag("Touchpad").performTouchInput { click(centerLeft) }
+
+        compose.runOnIdle { assertEquals(listOf(AppleTvCommand.LEFT), commands) }
+    }
+
+    @Test
+    fun touchpadOffersAccessibleMenuAction() {
+        val commands = mutableListOf<AppleTvCommand>()
+        setRecordingScreen(connectedState(), commands)
+
+        compose.onNodeWithTag("Touchpad").performSemanticsAction(SemanticsActions.OnLongClick)
+
+        compose.runOnIdle { assertEquals(listOf(AppleTvCommand.SELECT_LONG_PRESS), commands) }
+    }
+
+    @Test
+    fun holdingBackGoesToTheHomeScreen() {
+        val commands = mutableListOf<AppleTvCommand>()
+        setRecordingScreen(connectedState(), commands)
+
+        compose.onNodeWithContentDescription("Back").performTouchInput { longClick() }
+
+        compose.runOnIdle { assertEquals(listOf(AppleTvCommand.BACK_LONG_PRESS), commands) }
+    }
+
+    @Test
+    fun directionalButtonsReplaceTheTouchpad() {
+        val commands = mutableListOf<AppleTvCommand>()
+        val touches = mutableListOf<TouchGesture>()
+        setRecordingScreen(connectedState().copy(directionalButtons = true), commands, touches)
+
+        compose.onNodeWithTag("Touchpad").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Up").performClick()
+        compose.onNodeWithContentDescription("Select").performClick()
+
+        compose.onNodeWithContentDescription("Select").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(REMOTE_HOLD_MILLIS + 50)
+        compose.onNodeWithContentDescription("Select").performTouchInput { up() }
+
+        compose.runOnIdle {
+            assertEquals(listOf(AppleTvCommand.UP, AppleTvCommand.SELECT), commands)
+            assertEquals(listOf(TouchGesture.HoldStarted, TouchGesture.HoldEnded), touches)
+        }
+    }
+
+    @Test
+    fun holdingForwardScansUntilReleasedAndTappingSkips() {
+        val scans = mutableListOf<Pair<ScanDirection, Boolean>>()
+        val skips = mutableListOf<Int>()
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(skipSeconds = 15),
+                onScan = { direction, active -> scans += direction to active },
+                onSkipBy = { skips += it },
+            )
+        }
+
+        compose.onNodeWithContentDescription("Forward 15 seconds").performTouchInput { click(center) }
+        compose.runOnIdle { assertEquals(listOf(15), skips) }
+
+        compose.onNodeWithContentDescription("Forward 15 seconds").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(REMOTE_HOLD_MILLIS + 50)
+        compose.onNodeWithContentDescription("Forward 15 seconds").performTouchInput { up() }
+
+        compose.runOnIdle {
+            assertEquals(
+                listOf(ScanDirection.FAST_FORWARD to true, ScanDirection.FAST_FORWARD to false),
+                scans,
+            )
+            assertEquals(listOf(15), skips)
+        }
+    }
+
+    @Test
+    fun skipWithoutScanSupportStaysATapAfterALongPress() {
+        val scans = mutableListOf<Pair<ScanDirection, Boolean>>()
+        val skips = mutableListOf<Int>()
+        val available = Capability.entries.toSet() - Capability.FAST_FORWARD
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(
+                    capabilities = CapabilitySet(implemented = available, available = available),
+                ),
+                onScan = { direction, active -> scans += direction to active },
+                onSkipBy = { skips += it },
+            )
+        }
+
+        compose.onNodeWithContentDescription("Forward 30 seconds").performTouchInput { longClick() }
+
+        compose.runOnIdle {
+            assertEquals(emptyList<Pair<ScanDirection, Boolean>>(), scans)
+            assertEquals(listOf(30), skips)
+        }
+    }
+
+    @Test
+    fun scanWorksWithoutFixedSkipAndTapDoesNothing() {
+        val scans = mutableListOf<Pair<ScanDirection, Boolean>>()
+        val skips = mutableListOf<Int>()
+        val available = Capability.entries.toSet() - Capability.SKIP_FORWARD
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(
+                    capabilities = CapabilitySet(implemented = available, available = available),
+                ),
+                onScan = { direction, active -> scans += direction to active },
+                onSkipBy = { skips += it },
+            )
+        }
+
+        compose.onNodeWithContentDescription("Forward 30 seconds").performTouchInput { click(center) }
+        compose.onNodeWithContentDescription("Forward 30 seconds").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(REMOTE_HOLD_MILLIS + 50)
+        compose.onNodeWithContentDescription("Forward 30 seconds").performTouchInput { up() }
+
+        compose.runOnIdle {
+            assertEquals(emptyList<Int>(), skips)
+            assertEquals(
+                listOf(ScanDirection.FAST_FORWARD to true, ScanDirection.FAST_FORWARD to false),
+                scans,
+            )
+        }
+    }
+
+    @Test
+    fun favoriteAppsAppearOnTheRemoteAndLaunch() {
+        val launched = mutableListOf<String>()
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(
+                    apps = listOf(AppleTvApp("com.a", "Alpha"), AppleTvApp("com.b", "Beta")),
+                    favoriteBundleIds = setOf("com.b"),
+                ),
+                onLaunchApp = { launched += it },
+            )
+        }
+
+        compose.onNodeWithContentDescription("Open Alpha").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Open Beta").performClick()
+
+        compose.runOnIdle { assertEquals(listOf("com.b"), launched) }
+    }
+
+    @Test
+    fun muteShowsItsCurrentState() {
+        compose.setContent { TestRemoteScreen(state = connectedState().copy(muted = true)) }
+
+        compose.onNodeWithContentDescription("Unmute").assertIsEnabled()
+        compose.onNodeWithContentDescription("Mute").assertDoesNotExist()
+    }
+
+    @Test
+    fun moreSheetOpensItemMenuAndClosesAndExplainsMovingApps() {
+        val commands = mutableListOf<AppleTvCommand>()
+        var closed = false
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(sheet = RemoteSheet.MORE),
+                onCommand = { commands += it },
+                onCloseSheet = { closed = true },
+            )
+        }
+
+        compose.onNodeWithText("Move or remove an app").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("Item menu").performScrollTo().performClick()
+
+        compose.runOnIdle {
+            assertEquals(listOf(AppleTvCommand.SELECT_LONG_PRESS), commands)
+            assertTrue(closed)
+        }
+    }
+
+    @Test
+    fun profilesAppearOnlyWhenThereIsAChoice() {
+        val switched = mutableListOf<String>()
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(
+                    sheet = RemoteSheet.MORE,
+                    accounts = listOf(AppleTvAccount("1", "Sam"), AppleTvAccount("2", "Noor")),
+                ),
+                onSwitchAccount = { switched += it },
+            )
+        }
+
+        compose.onNodeWithText("Noor").performScrollTo().performClick()
+
+        compose.runOnIdle { assertEquals(listOf("2"), switched) }
+    }
+
+    @Test
+    fun fourthPinDigitSubmitsPairing() {
+        var submits = 0
+        compose.setContent {
+            TestRemoteScreen(
+                state = RemoteUiState(selectedDeviceName = "Living Room", sheet = RemoteSheet.PAIRING, pin = "1234"),
+                onSubmitPin = { submits += 1 },
+            )
+        }
+
+        compose.runOnIdle { assertEquals(1, submits) }
+    }
+
+    @Test
+    fun settingsOffersWidgetAndQuickSettingsIcon() {
+        var widgetRequests = 0
+        var tileRequests = 0
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(sheet = RemoteSheet.SETTINGS),
+                onAddWidget = { widgetRequests += 1 },
+                onAddQuickSettingsTile = { tileRequests += 1 },
+            )
+        }
+
+        compose.onNodeWithText("Add Home screen widget").performClick()
+        compose.onNodeWithText("Add Quick Settings icon").performClick()
+
+        compose.runOnIdle {
+            assertEquals(1, widgetRequests)
+            assertEquals(1, tileRequests)
+        }
+    }
+
+    @Test
+    fun asleepTvOffersWake() {
+        var wakes = 0
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(powerState = PowerState.OFF),
+                onWake = { wakes += 1 },
+            )
+        }
+
+        compose.onNodeWithText("Living Room is asleep").assertIsDisplayed()
+        compose.onNodeWithText("Wake").performClick()
+
+        compose.runOnIdle { assertEquals(1, wakes) }
+    }
 }
 
 @Composable
@@ -531,10 +877,20 @@ private fun TestRemoteScreen(
     onStartPairing: (String) -> Unit = {},
     onSleep: () -> Unit = {},
     onForget: (String) -> Unit = {},
+    onCommand: (AppleTvCommand) -> Unit = {},
+    onTouch: (TouchGesture) -> Unit = {},
+    onScan: (ScanDirection, Boolean) -> Unit = { _, _ -> },
+    onSkipBy: (Int) -> Unit = {},
+    onLaunchApp: (String) -> Unit = {},
+    onSwitchAccount: (String) -> Unit = {},
+    onSubmitPin: () -> Unit = {},
+    onWake: () -> Unit = {},
     onRefreshKeyboard: () -> Unit = {},
     onRetryKeyboard: () -> Unit = {},
     onStartFreshKeyboard: () -> Unit = {},
     onCloseKeyboardAnyway: () -> Unit = {},
+    onAddWidget: () -> Unit = {},
+    onAddQuickSettingsTile: () -> Unit = {},
 ) {
     RelayRemoteTheme {
         RemoteScreen(
@@ -544,18 +900,20 @@ private fun TestRemoteScreen(
             onSelectDevice = {},
             onStartPairing = onStartPairing,
             onPinChanged = {},
-            onSubmitPin = {},
+            onSubmitPin = onSubmitPin,
             onKeyboardTextChanged = {},
             onKeyboardOperation = {},
-            onCommand = {},
-            onSkipBy = {},
-            onTouch = {},
-            onWake = {},
+            onCommand = onCommand,
+            onSkipBy = onSkipBy,
+            onScan = onScan,
+            onTouch = onTouch,
+            onWake = onWake,
             onSleep = onSleep,
             onVolumeUp = {},
             onVolumeDown = {},
             onMute = {},
-            onLaunchApp = {},
+            onLaunchApp = onLaunchApp,
+            onSwitchAccount = onSwitchAccount,
             onFavoriteChanged = { _, _ -> },
             onRename = { _, _ -> },
             onForget = onForget,
@@ -566,6 +924,8 @@ private fun TestRemoteScreen(
             onRetryKeyboard = onRetryKeyboard,
             onStartFreshKeyboard = onStartFreshKeyboard,
             onCloseKeyboardAnyway = onCloseKeyboardAnyway,
+            onAddWidget = onAddWidget,
+            onAddQuickSettingsTile = onAddQuickSettingsTile,
         )
     }
 }

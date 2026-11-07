@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -44,6 +46,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +58,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.StrokeCap
@@ -72,6 +77,7 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -89,9 +95,11 @@ import io.coreback.relayremote.protocol.Capability
 import io.coreback.relayremote.protocol.ConnectionState
 import io.coreback.relayremote.protocol.KeyboardOperation
 import io.coreback.relayremote.protocol.PowerState
+import io.coreback.relayremote.protocol.ScanDirection
 import io.coreback.relayremote.protocol.TouchGesture
 import io.coreback.relayremote.ui.RelayBlack
 import io.coreback.relayremote.ui.RelayCarbon
+import io.coreback.relayremote.ui.RelayCarbonRaised
 import io.coreback.relayremote.ui.RelayCyan
 import io.coreback.relayremote.ui.RelayFog
 import io.coreback.relayremote.ui.RelayMoon
@@ -113,6 +121,7 @@ fun RemoteScreen(
     onKeyboardOperation: (KeyboardOperation) -> Unit,
     onCommand: (AppleTvCommand) -> Unit,
     onSkipBy: (Int) -> Unit,
+    onScan: (ScanDirection, Boolean) -> Unit = { _, _ -> },
     onTouch: (TouchGesture) -> Unit,
     onWake: () -> Unit,
     onSleep: () -> Unit,
@@ -121,9 +130,11 @@ fun RemoteScreen(
     onMute: () -> Unit,
     onLaunchApp: (String) -> Unit,
     onFavoriteChanged: (String, Boolean) -> Unit,
+    onSwitchAccount: (String) -> Unit = {},
     onRename: (String, String?) -> Unit,
     onForget: (String) -> Unit,
     onKeepScreenAwakeChanged: (Boolean) -> Unit,
+    onDirectionalButtonsChanged: (Boolean) -> Unit = {},
     onSkipSecondsChanged: (Int) -> Unit,
     onRefreshDiscovery: () -> Unit = {},
     onRetryConnection: () -> Unit = {},
@@ -132,6 +143,8 @@ fun RemoteScreen(
     onRetryKeyboard: () -> Unit = {},
     onStartFreshKeyboard: () -> Unit = {},
     onCloseKeyboardAnyway: () -> Unit = {},
+    onAddWidget: () -> Unit = {},
+    onAddQuickSettingsTile: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -175,6 +188,19 @@ fun RemoteScreen(
             Spacer(Modifier.height(10.dp))
         }
 
+        if (state.connectionState == ConnectionState.Connected &&
+            state.powerState == PowerState.OFF &&
+            state.controlEnabled(Capability.WAKE)
+        ) {
+            InlineMessage(
+                message = "${state.selectedDeviceName ?: "Apple TV"} is asleep",
+                error = false,
+                actionLabel = "Wake",
+                onAction = onWake,
+            )
+            Spacer(Modifier.height(10.dp))
+        }
+
         state.nowPlaying?.let { media ->
             NowPlayingStrip(media)
             Spacer(Modifier.height(12.dp))
@@ -197,6 +223,7 @@ fun RemoteScreen(
                 icon = RemoteIcon.KEYBOARD,
                 description = "Keyboard",
                 enabled = state.controlEnabled(Capability.KEYBOARD),
+                highlighted = state.controlEnabled(Capability.KEYBOARD),
                 onClick = { onOpenSheet(RemoteSheet.KEYBOARD) },
                 modifier = Modifier.weight(1f),
             )
@@ -210,16 +237,22 @@ fun RemoteScreen(
             )
         }
 
+        if (state.controlEnabled(Capability.APPS) && state.favoriteApps.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            FavoriteAppsRow(state.favoriteApps, onLaunchApp)
+        }
+
         Spacer(Modifier.height(14.dp))
-        RelayTouchpad(
-            enabled = state.controlEnabled(Capability.TOUCH) ||
-                state.controlEnabled(Capability.NAVIGATION),
-            onCommand = onCommand,
-            onTouch = onTouch,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-        )
+        val touchEnabled = state.controlEnabled(Capability.TOUCH) ||
+            state.controlEnabled(Capability.NAVIGATION)
+        val padModifier = Modifier
+            .fillMaxWidth()
+            .weight(1f)
+        if (state.directionalButtons) {
+            RelayDirectionalPad(touchEnabled, onCommand, onTouch, padModifier)
+        } else {
+            RelayTouchpad(touchEnabled, onCommand, onTouch, padModifier)
+        }
         Spacer(Modifier.height(14.dp))
         CommandDock(
             state = state,
@@ -232,6 +265,7 @@ fun RemoteScreen(
         PlaybackSkipRow(
             state = state,
             onSkipBy = onSkipBy,
+            onScan = onScan,
         )
         Spacer(
             Modifier.height(
@@ -243,6 +277,8 @@ fun RemoteScreen(
     if (state.sheet != RemoteSheet.NONE) {
         ModalBottomSheet(
             onDismissRequest = onCloseSheet,
+            // Long sheets would otherwise open half hidden, with no sign that there is more.
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
             containerColor = RelayCarbon,
             contentColor = RelayMoon,
         ) {
@@ -283,17 +319,21 @@ fun RemoteScreen(
                     onRetry = onRetryKeyboard,
                     onStartFresh = onStartFreshKeyboard,
                     onCloseAnyway = onCloseKeyboardAnyway,
+                    onDone = onCloseSheet,
                 )
-                RemoteSheet.MORE -> MoreSheet(state, onCommand)
+                RemoteSheet.MORE -> MoreSheet(state, onCommand, onSwitchAccount, onCloseSheet)
                 RemoteSheet.SETTINGS -> SettingsSheet(
                     state = state,
                     onKeepScreenAwakeChanged = onKeepScreenAwakeChanged,
+                    onDirectionalButtonsChanged = onDirectionalButtonsChanged,
                     onSkipSecondsChanged = onSkipSecondsChanged,
                     onRename = onRename,
                     onForget = onForget,
                     onRePair = onStartPairing,
                     onDiagnostics = { onOpenSheet(RemoteSheet.DIAGNOSTICS) },
                     onLicenses = { onOpenSheet(RemoteSheet.LICENSES) },
+                    onAddWidget = onAddWidget,
+                    onAddQuickSettingsTile = onAddQuickSettingsTile,
                 )
                 RemoteSheet.DIAGNOSTICS -> DiagnosticsSheet(state)
                 RemoteSheet.LICENSES -> LicensesSheet()
@@ -873,7 +913,9 @@ private fun QuickAction(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    highlighted: Boolean = false,
 ) {
+    val accent = if (highlighted) RelayCyan else if (enabled) RelayMoon else RelayFog
     Surface(
         onClick = onClick,
         enabled = enabled,
@@ -881,16 +923,52 @@ private fun QuickAction(
             .height(62.dp)
             .semantics { contentDescription = description },
         shape = RoundedCornerShape(20.dp),
-        color = RelayCarbon,
-        contentColor = if (enabled) RelayMoon else RelayFog,
+        color = if (highlighted) RelayCyan.copy(alpha = 0.14f) else RelayCarbon,
+        contentColor = accent,
     ) {
-        Row(
-            Modifier.padding(horizontal = 13.dp),
-            verticalAlignment = Alignment.CenterVertically,
+        // Stacked, because a side-by-side icon leaves too little room for "Keyboard" on a phone.
+        Column(
+            Modifier.padding(horizontal = 6.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            RemoteIconGraphic(icon, if (enabled) RelayMoon else RelayFog, Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge)
+            RemoteIconGraphic(icon, accent, Modifier.size(20.dp))
+            Spacer(Modifier.height(4.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FavoriteAppsRow(
+    apps: List<io.coreback.relayremote.protocol.AppleTvApp>,
+    onLaunchApp: (String) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("Favorite apps"),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(apps, key = { it.bundleId }) { app ->
+            Surface(
+                onClick = { onLaunchApp(app.bundleId) },
+                modifier = Modifier
+                    .height(48.dp)
+                    .semantics { contentDescription = "Open ${app.name}" },
+                shape = RoundedCornerShape(16.dp),
+                color = RelayCarbon,
+                contentColor = RelayMoon,
+            ) {
+                Box(Modifier.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+                    Text(app.name, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                }
+            }
         }
     }
 }
@@ -913,13 +991,25 @@ private fun CommandDock(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            DockButton(RemoteIcon.BACK, "Back", state.controlEnabled(Capability.BACK)) {
-                onCommand(AppleTvCommand.BACK)
-            }
-            HomeDockButton(
+            DockButton(
+                icon = RemoteIcon.BACK,
+                description = "Back",
+                enabled = state.controlEnabled(Capability.BACK),
+                longClickLabel = "Go to the Home Screen",
+                onLongClick = { onCommand(AppleTvCommand.BACK_LONG_PRESS) },
+                onClick = { onCommand(AppleTvCommand.BACK) },
+            )
+            DockButton(
+                icon = RemoteIcon.HOME,
+                description = "Home",
                 enabled = state.controlEnabled(Capability.HOME),
-                longEnabled = state.controlEnabled(Capability.HOME_LONG_PRESS),
-                onCommand = onCommand,
+                longClickLabel = "Open Control Center",
+                onLongClick = if (state.controlEnabled(Capability.HOME_LONG_PRESS)) {
+                    { onCommand(AppleTvCommand.HOME_LONG_PRESS) }
+                } else {
+                    null
+                },
+                onClick = { onCommand(AppleTvCommand.HOME) },
             )
             DockButton(
                 if (state.nowPlaying?.isPlaying == true) RemoteIcon.PAUSE else RemoteIcon.PLAY,
@@ -928,7 +1018,13 @@ private fun CommandDock(
             ) {
                 onCommand(AppleTvCommand.PLAY_PAUSE)
             }
-            DockButton(RemoteIcon.MUTE, "Mute", state.controlEnabled(Capability.MUTE), onMute)
+            DockButton(
+                icon = RemoteIcon.MUTE,
+                description = if (state.muted) "Unmute" else "Mute",
+                enabled = state.controlEnabled(Capability.MUTE),
+                active = state.muted,
+                onClick = onMute,
+            )
             VolumeRocker(
                 enabled = state.controlEnabled(Capability.VOLUME),
                 onUp = onVolumeUp,
@@ -942,6 +1038,7 @@ private fun CommandDock(
 private fun PlaybackSkipRow(
     state: RemoteUiState,
     onSkipBy: (Int) -> Unit,
+    onScan: (ScanDirection, Boolean) -> Unit,
 ) {
     Surface(
         modifier = Modifier
@@ -958,7 +1055,9 @@ private fun PlaybackSkipRow(
                 seconds = state.skipSeconds,
                 forward = false,
                 enabled = state.controlEnabled(Capability.SKIP_BACKWARD),
+                scanEnabled = state.controlEnabled(Capability.REWIND),
                 onClick = { onSkipBy(-state.skipSeconds) },
+                onScan = { active -> onScan(ScanDirection.REWIND, active) },
                 modifier = Modifier.weight(1f),
             )
             Box(
@@ -971,7 +1070,9 @@ private fun PlaybackSkipRow(
                 seconds = state.skipSeconds,
                 forward = true,
                 enabled = state.controlEnabled(Capability.SKIP_FORWARD),
+                scanEnabled = state.controlEnabled(Capability.FAST_FORWARD),
                 onClick = { onSkipBy(state.skipSeconds) },
+                onScan = { active -> onScan(ScanDirection.FAST_FORWARD, active) },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -983,12 +1084,17 @@ private fun PlaybackSkipSegment(
     seconds: Int,
     forward: Boolean,
     enabled: Boolean,
+    scanEnabled: Boolean,
     onClick: () -> Unit,
+    onScan: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val haptics = LocalHapticFeedback.current
+    var pressed by remember { mutableStateOf(false) }
     val accent = if (forward) RelayCyan else RelayViolet
-    val contentColor = if (enabled) accent else RelayFog
+    // An app can offer scanning without fixed skips, and then only the hold does anything.
+    val usable = enabled || scanEnabled
+    val contentColor = if (usable) accent else RelayFog
     val description = if (forward) {
         "Forward $seconds seconds"
     } else {
@@ -999,15 +1105,34 @@ private fun PlaybackSkipSegment(
             .fillMaxSize()
             .semantics {
                 contentDescription = description
-                if (!enabled) disabled()
+                role = Role.Button
+                if (!usable) disabled()
+                if (enabled) {
+                    onClick {
+                        onClick()
+                        true
+                    }
+                }
             }
-            .combinedClickable(
-                enabled = enabled,
-                role = Role.Button,
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                    onClick()
+            .background(if (pressed) accent.copy(alpha = 0.14f) else Color.Transparent)
+            .remotePress(
+                enabled = usable,
+                onPressedChange = { pressed = it },
+                onTap = {
+                    if (enabled) {
+                        haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                        onClick()
+                    }
                 },
+                onHoldStart = if (scanEnabled) {
+                    {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onScan(true)
+                    }
+                } else {
+                    null
+                },
+                onHoldEnd = { onScan(false) },
             ),
         contentAlignment = Alignment.Center,
     ) {
@@ -1073,65 +1198,46 @@ private fun OrbitSkipIcon(
 }
 
 @Composable
-private fun HomeDockButton(
-    enabled: Boolean,
-    longEnabled: Boolean,
-    onCommand: (AppleTvCommand) -> Unit,
-) {
-    val haptics = LocalHapticFeedback.current
-    Surface(
-        modifier = Modifier
-            .size(50.dp)
-            .semantics { contentDescription = "Home" }
-            .combinedClickable(
-                enabled = enabled,
-                role = Role.Button,
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-                    onCommand(AppleTvCommand.HOME)
-                },
-                onLongClick = if (longEnabled) {
-                    {
-                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onCommand(AppleTvCommand.HOME_LONG_PRESS)
-                    }
-                } else {
-                    null
-                },
-            ),
-        shape = CircleShape,
-        color = RelayBlack,
-        contentColor = if (enabled) RelayMoon else RelayFog,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            RemoteIconGraphic(RemoteIcon.HOME, if (enabled) RelayMoon else RelayFog, Modifier.size(21.dp))
-        }
-    }
-}
-
-@Composable
 private fun DockButton(
     icon: RemoteIcon,
     description: String,
     enabled: Boolean,
+    active: Boolean = false,
+    longClickLabel: String? = null,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
+    val tint = when {
+        !enabled -> RelayFog
+        active -> RelayCyan
+        else -> RelayMoon
+    }
     Surface(
-        onClick = {
-            haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
-            onClick()
-        },
-        enabled = enabled,
         modifier = Modifier
             .size(50.dp)
-            .semantics { contentDescription = description },
+            .semantics { contentDescription = description }
+            .combinedClickable(
+                enabled = enabled,
+                role = Role.Button,
+                onLongClickLabel = longClickLabel,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
+                    onClick()
+                },
+                onLongClick = onLongClick?.let { action ->
+                    {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        action()
+                    }
+                },
+            ),
         shape = CircleShape,
-        color = RelayBlack,
-        contentColor = if (enabled) RelayMoon else RelayFog,
+        color = if (active) RelayCyan.copy(alpha = 0.16f) else RelayBlack,
+        contentColor = tint,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            RemoteIconGraphic(icon, if (enabled) RelayMoon else RelayFog, Modifier.size(21.dp))
+            RemoteIconGraphic(icon, tint, Modifier.size(21.dp))
         }
     }
 }
@@ -1202,7 +1308,11 @@ private fun RepeatingMiniAction(
             },
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, style = MaterialTheme.typography.titleMedium)
+        Text(
+            label,
+            color = if (enabled) RelayMoon else RelayFog,
+            style = MaterialTheme.typography.titleMedium,
+        )
     }
 }
 
@@ -1388,6 +1498,12 @@ private fun PairingSheet(
     onPinChanged: (String) -> Unit,
     onSubmit: () -> Unit,
 ) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+    // The code has a fixed length, so the fourth digit finishes the task without another tap.
+    LaunchedEffect(state.pin) {
+        if (state.pin.length == 4 && !state.pairingInProgress) onSubmit()
+    }
     SheetTitle(
         "Pair ${state.selectedDeviceName ?: "Apple TV"}",
         "Enter the four-digit code shown on the television. It is never stored.",
@@ -1397,7 +1513,8 @@ private fun PairingSheet(
         onValueChange = onPinChanged,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 22.dp, vertical = 14.dp),
+            .padding(horizontal = 22.dp, vertical = 14.dp)
+            .focusRequester(focusRequester),
         label = { Text("Pairing code") },
         placeholder = { Text("•  •  •  •", Modifier.fillMaxWidth(), textAlign = TextAlign.Center) },
         singleLine = true,
@@ -1443,23 +1560,21 @@ private fun AppsSheet(
 ) {
     var query by remember { mutableStateOf("") }
     SheetTitle("Apps", state.selectedDeviceName)
-    OutlinedTextField(
-        value = query,
-        onValueChange = { query = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 22.dp, vertical = 10.dp),
-        label = { Text("Search installed apps") },
-        singleLine = true,
-    )
-    val visible = state.apps
-        .filter { it.name.contains(query, ignoreCase = true) }
-        .sortedWith(
-            compareByDescending<io.coreback.relayremote.protocol.AppleTvApp> {
-                it.bundleId in state.favoriteBundleIds
-            }.thenBy { it.name.lowercase() },
+    if (state.apps.size > APP_SEARCH_THRESHOLD) {
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 22.dp, vertical = 10.dp),
+            label = { Text("Search installed apps") },
+            singleLine = true,
         )
-    if (state.appsLoading) {
+    }
+    val visible = state.apps.filter { it.name.contains(query.trim(), ignoreCase = true) }
+    val favorites = visible.filter { it.bundleId in state.favoriteBundleIds }
+    val others = visible.filter { it.bundleId !in state.favoriteBundleIds }
+    if (state.appsLoading && state.apps.isEmpty()) {
         CircularProgressIndicator(
             Modifier
                 .padding(22.dp)
@@ -1474,47 +1589,77 @@ private fun AppsSheet(
         )
     } else {
         LazyColumn {
-            items(visible, key = { it.bundleId }) { app ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 22.dp, end = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Surface(
-                        onClick = { onLaunchApp(app.bundleId) },
-                        color = RelayCarbon,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(
-                            app.name,
-                            modifier = Modifier.padding(vertical = 16.dp),
-                        )
-                    }
-                    TextButton(
-                        onClick = {
-                            onFavoriteChanged(
-                                app.bundleId,
-                                app.bundleId !in state.favoriteBundleIds,
-                            )
-                        },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .semantics {
-                                contentDescription = if (app.bundleId in state.favoriteBundleIds) {
-                                    "Remove ${app.name} from favorites"
-                                } else {
-                                    "Add ${app.name} to favorites"
-                                }
-                            },
-                    ) {
-                        Text(
-                            if (app.bundleId in state.favoriteBundleIds) "★" else "☆",
-                            color = if (app.bundleId in state.favoriteBundleIds) RelayCyan else RelayFog,
-                        )
-                    }
+            if (favorites.isNotEmpty()) {
+                item(key = "header:favorites") { SettingsSectionLabel("Favorites") }
+                items(favorites, key = { it.bundleId }) { app ->
+                    AppRow(app, favorite = true, onLaunchApp, onFavoriteChanged)
+                }
+                if (others.isNotEmpty()) {
+                    item(key = "header:all") { SettingsSectionLabel("All apps") }
                 }
             }
+            items(others, key = { it.bundleId }) { app ->
+                AppRow(app, favorite = false, onLaunchApp, onFavoriteChanged)
+            }
+            item(key = "footer") { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun AppRow(
+    app: io.coreback.relayremote.protocol.AppleTvApp,
+    favorite: Boolean,
+    onLaunchApp: (String) -> Unit,
+    onFavoriteChanged: (String, Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 10.dp, end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Surface(
+            onClick = { onLaunchApp(app.bundleId) },
+            color = RelayCarbon,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier
+                .weight(1f)
+                .semantics { contentDescription = "Open ${app.name}" },
+        ) {
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .background(RelayCarbonRaised, RoundedCornerShape(10.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        app.name.take(1).uppercase(),
+                        color = RelayCyan,
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Text(app.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        TextButton(
+            onClick = { onFavoriteChanged(app.bundleId, !favorite) },
+            modifier = Modifier
+                .size(48.dp)
+                .semantics {
+                    contentDescription = if (favorite) {
+                        "Remove ${app.name} from favorites"
+                    } else {
+                        "Add ${app.name} to favorites"
+                    }
+                },
+        ) {
+            Text(if (favorite) "★" else "☆", color = if (favorite) RelayCyan else RelayFog)
         }
     }
 }
@@ -1528,8 +1673,10 @@ private fun KeyboardSheet(
     onRetry: () -> Unit,
     onStartFresh: () -> Unit,
     onCloseAnyway: () -> Unit,
+    onDone: () -> Unit,
 ) {
     val softwareKeyboard = LocalSoftwareKeyboardController.current
+    val focusRequester = remember { FocusRequester() }
     var fieldValue by remember { mutableStateOf(TextFieldValue(state.keyboardText)) }
     LaunchedEffect(state.keyboardText) {
         if (fieldValue.composition == null && fieldValue.text != state.keyboardText) {
@@ -1542,6 +1689,13 @@ private fun KeyboardSheet(
     val editingEnabled = state.keyboardSnapshotLoaded &&
         state.keyboardSyncState != KeyboardSyncState.LOADING &&
         state.keyboardSyncState != KeyboardSyncState.UNAVAILABLE
+    LaunchedEffect(editingEnabled) {
+        if (editingEnabled) focusRequester.requestFocus()
+    }
+    val finish = {
+        softwareKeyboard?.hide()
+        if (!state.keyboardDirty) onDone()
+    }
     val status = when (state.keyboardSyncState) {
         KeyboardSyncState.IDLE -> "Waiting for an Apple TV text field"
         KeyboardSyncState.LOADING -> "Loading current text from Apple TV…"
@@ -1553,7 +1707,7 @@ private fun KeyboardSheet(
     }
     SheetTitle(
         "Keyboard",
-        "Existing text loads first, then edits update live. Secure fields may hide their current value.",
+        "What you type appears on Apple TV as you go. Password fields may hide their current text.",
     )
     OutlinedTextField(
         value = fieldValue,
@@ -1564,12 +1718,13 @@ private fun KeyboardSheet(
         enabled = editingEnabled,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 22.dp, vertical = 12.dp),
+            .padding(horizontal = 22.dp, vertical = 12.dp)
+            .focusRequester(focusRequester),
         label = { Text("Text") },
         minLines = 2,
         maxLines = 5,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { softwareKeyboard?.hide() }),
+        keyboardActions = KeyboardActions(onDone = { finish() }),
     )
     Row(
         modifier = Modifier
@@ -1634,46 +1789,148 @@ private fun KeyboardSheet(
                 enabled = editingEnabled && state.keyboardText.isNotEmpty(),
             ) { Text("Clear") }
         }
-        Button(onClick = { softwareKeyboard?.hide() }) { Text("Done") }
+        Button(onClick = { finish() }) { Text("Done") }
     }
     Spacer(Modifier.height(24.dp))
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+private const val APP_SEARCH_THRESHOLD = 6
+
+private data class MoreAction(
+    val label: String,
+    val detail: String,
+    val capability: Capability,
+    val command: AppleTvCommand,
+    val closesSheet: Boolean,
+)
+
+private val SYSTEM_ACTIONS = listOf(
+    MoreAction("Item menu", "Options for the highlighted item", Capability.SELECT, AppleTvCommand.SELECT_LONG_PRESS, true),
+    MoreAction("Control Center", "Or hold Home", Capability.HOME_LONG_PRESS, AppleTvCommand.HOME_LONG_PRESS, true),
+    MoreAction("Open apps", "Or double-tap Home", Capability.HOME_DOUBLE_PRESS, AppleTvCommand.HOME_DOUBLE_PRESS, true),
+    MoreAction("Home Screen", "Or hold Back", Capability.BACK, AppleTvCommand.BACK_LONG_PRESS, true),
+    MoreAction("Screensaver", "Start it now", Capability.SCREENSAVER, AppleTvCommand.SCREENSAVER, true),
+)
+
+private val PLAYBACK_ACTIONS = listOf(
+    MoreAction("Previous", "Track or chapter", Capability.PREVIOUS, AppleTvCommand.PREVIOUS, false),
+    MoreAction("Next", "Track or chapter", Capability.NEXT, AppleTvCommand.NEXT, false),
+)
+
+private val LIVE_TV_ACTIONS = listOf(
+    MoreAction("Guide", "Live TV listings", Capability.CHANNELS, AppleTvCommand.GUIDE, true),
+    MoreAction("Channel up", "Or page up", Capability.CHANNELS, AppleTvCommand.CHANNEL_UP, false),
+    MoreAction("Channel down", "Or page down", Capability.CHANNELS, AppleTvCommand.CHANNEL_DOWN, false),
+)
+
+private val GESTURE_TIPS = listOf(
+    "Touchpad" to "Swipe to move. Tap to select. Tap an edge to move one step, or hold it to keep moving.",
+    "Back" to "Tap to go back. Hold to go to the Home Screen.",
+    "Home" to "Tap for the Apple TV app. Double-tap for open apps. Hold for Control Center.",
+    "Rewind and Forward" to "Tap to skip. Hold to scan when the app supports it.",
+    "Phone volume keys" to "Change the TV volume when your audio setup supports it.",
+)
+
+private val ARRANGE_APP_STEPS = listOf(
+    "On Apple TV, highlight the app.",
+    "Hold the center of the touchpad until the menu opens.",
+    "To move it, choose Edit Home Screen, swipe to the new place, then tap to drop it.",
+    "To remove it, choose Delete App, then Delete or Offload.",
+)
+
 @Composable
-private fun MoreSheet(state: RemoteUiState, onCommand: (AppleTvCommand) -> Unit) {
-    SheetTitle("Playback", "Only live capabilities are enabled")
-    FlowRow(
-        modifier = Modifier.padding(18.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        SheetCommand("Previous", Capability.PREVIOUS, AppleTvCommand.PREVIOUS, state, onCommand)
-        SheetCommand("Next", Capability.NEXT, AppleTvCommand.NEXT, state, onCommand)
-        SheetCommand(
-            "App switcher",
-            Capability.HOME_DOUBLE_PRESS,
-            AppleTvCommand.HOME_DOUBLE_PRESS,
-            state,
-            onCommand,
-        )
+private fun MoreSheet(
+    state: RemoteUiState,
+    onCommand: (AppleTvCommand) -> Unit,
+    onSwitchAccount: (String) -> Unit,
+    onClose: () -> Unit,
+) {
+    LazyColumn {
+        item { SheetTitle("More controls", state.selectedDeviceName) }
+        item { MoreActionSection("Apple TV", SYSTEM_ACTIONS, state, onCommand, onClose) }
+        item { MoreActionSection("Playback", PLAYBACK_ACTIONS, state, onCommand, onClose) }
+        item { MoreActionSection("Live TV", LIVE_TV_ACTIONS, state, onCommand, onClose) }
+        if (state.accounts.size > 1) {
+            item { SettingsSectionLabel("Switch profile") }
+            items(state.accounts, key = { it.id }) { account ->
+                SettingsLink(account.name, "Use this profile on Apple TV") {
+                    onSwitchAccount(account.id)
+                }
+            }
+        }
+        item { SettingsSectionLabel("Move or remove an app") }
+        item {
+            Column(Modifier.padding(horizontal = 22.dp, vertical = 4.dp)) {
+                ARRANGE_APP_STEPS.forEachIndexed { index, step ->
+                    Row(Modifier.padding(vertical = 4.dp)) {
+                        Text("${index + 1}.", Modifier.width(24.dp), color = RelayFog, style = MaterialTheme.typography.bodyMedium)
+                        Text(step, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        }
+        item { SettingsSectionLabel("Gestures") }
+        items(GESTURE_TIPS, key = { it.first }) { (title, detail) ->
+            Column(Modifier.padding(horizontal = 22.dp, vertical = 6.dp)) {
+                Text(title, fontWeight = FontWeight.Medium)
+                Text(detail, color = RelayFog, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        item {
+            Text(
+                "Siri, subtitles, and InSight are not available yet because their commands are not publicly documented.",
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 14.dp),
+                color = RelayFog,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        item { Spacer(Modifier.height(24.dp)) }
     }
-    Spacer(Modifier.height(20.dp))
 }
 
 @Composable
-private fun SheetCommand(
-    label: String,
-    capability: Capability,
-    command: AppleTvCommand,
+private fun MoreActionSection(
+    title: String,
+    actions: List<MoreAction>,
     state: RemoteUiState,
     onCommand: (AppleTvCommand) -> Unit,
+    onClose: () -> Unit,
 ) {
-    Button(
-        onClick = { onCommand(command) },
-        enabled = state.controlEnabled(capability),
-        colors = ButtonDefaults.buttonColors(containerColor = RelayCyan.copy(alpha = 0.18f)),
-    ) { Text(label) }
+    SettingsSectionLabel(title)
+    Column(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        actions.chunked(2).forEach { row ->
+            Row(
+                modifier = Modifier.height(androidx.compose.foundation.layout.IntrinsicSize.Min),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                row.forEach { action ->
+                    val enabled = state.controlEnabled(action.capability)
+                    Surface(
+                        onClick = {
+                            onCommand(action.command)
+                            if (action.closesSheet) onClose()
+                        },
+                        enabled = enabled,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = RelayCarbonRaised,
+                        contentColor = if (enabled) RelayMoon else RelayFog,
+                    ) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                            Text(action.label, style = MaterialTheme.typography.titleMedium)
+                            Text(action.detail, color = RelayFog, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -1681,12 +1938,15 @@ private fun SheetCommand(
 private fun SettingsSheet(
     state: RemoteUiState,
     onKeepScreenAwakeChanged: (Boolean) -> Unit,
+    onDirectionalButtonsChanged: (Boolean) -> Unit,
     onSkipSecondsChanged: (Int) -> Unit,
     onRename: (String, String?) -> Unit,
     onForget: (String) -> Unit,
     onRePair: (String) -> Unit,
     onDiagnostics: () -> Unit,
     onLicenses: () -> Unit,
+    onAddWidget: () -> Unit,
+    onAddQuickSettingsTile: () -> Unit,
 ) {
     var alias by remember(state.selectedDeviceName) {
         mutableStateOf(state.selectedDeviceName.orEmpty())
@@ -1709,6 +1969,27 @@ private fun SettingsSheet(
                 Switch(
                     checked = state.keepScreenAwake,
                     onCheckedChange = onKeepScreenAwakeChanged,
+                )
+            }
+        }
+        item {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 22.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Directional buttons", fontWeight = FontWeight.Medium)
+                    Text(
+                        "Use buttons instead of swiping on the touchpad",
+                        color = RelayFog,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                Switch(
+                    checked = state.directionalButtons,
+                    onCheckedChange = onDirectionalButtonsChanged,
                 )
             }
         }
@@ -1739,6 +2020,9 @@ private fun SettingsSheet(
                 }
             }
         }
+        item { SettingsSectionLabel("Quick access") }
+        item { SettingsLink("Add Home screen widget", "Open the remote from your Home screen", onAddWidget) }
+        item { SettingsLink("Add Quick Settings icon", "Swipe down from the top of the screen to open the remote", onAddQuickSettingsTile) }
         state.selectedDeviceId?.let { id ->
             item { SettingsSectionLabel("Selected Apple TV") }
             item {
@@ -1785,7 +2069,10 @@ private fun SettingsSheet(
                         .padding(horizontal = 14.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    TextButton(onClick = { onRename(id, alias.ifBlank { null }) }) { Text("Save name") }
+                    TextButton(
+                        onClick = { onRename(id, alias.ifBlank { null }) },
+                        enabled = alias.trim() != state.selectedDeviceName,
+                    ) { Text("Save name") }
                     TextButton(onClick = { onRePair(id) }) { Text("Pair again") }
                 }
             }

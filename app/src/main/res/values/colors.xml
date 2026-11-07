@@ -2,4 +2,5 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="relay_accent">#FF78D7FF</color>
+    <color name="widget_background">#FF111318</color>
 </resources>

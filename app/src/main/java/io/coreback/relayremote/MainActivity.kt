@@ -49,6 +49,9 @@ class MainActivity : ComponentActivity() {
                     onKeyboardOperation = remoteViewModel::keyboard,
                     onCommand = remoteViewModel::send,
                     onSkipBy = remoteViewModel::skipBy,
+                    onScan = remoteViewModel::scan,
+                    onSwitchAccount = remoteViewModel::switchAccount,
+                    onDirectionalButtonsChanged = remoteViewModel::setDirectionalButtons,
                     onTouch = remoteViewModel::touch,
                     onWake = remoteViewModel::wake,
                     onSleep = remoteViewModel::sleep,
@@ -68,6 +71,8 @@ class MainActivity : ComponentActivity() {
                     onRetryKeyboard = remoteViewModel::retryKeyboardSync,
                     onStartFreshKeyboard = remoteViewModel::startFreshKeyboardText,
                     onCloseKeyboardAnyway = remoteViewModel::closeKeyboardAnyway,
+                    onAddWidget = { RemoteShortcuts.requestHomeScreenWidget(this) },
+                    onAddQuickSettingsTile = { RemoteShortcuts.requestQuickSettingsTile(this) },
                 )
             }
         }
@@ -79,12 +84,17 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (event.repeatCount == 0) {
+        // Holding a volume key keeps changing the level, at a pace the TV can follow.
+        if (event.repeatCount % VOLUME_REPEAT_DIVISOR == 0) {
             when (keyCode) {
                 KeyEvent.KEYCODE_VOLUME_UP -> if (remoteViewModel.hardwareVolume(up = true)) return true
                 KeyEvent.KEYCODE_VOLUME_DOWN -> if (remoteViewModel.hardwareVolume(up = false)) return true
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    private companion object {
+        const val VOLUME_REPEAT_DIVISOR = 3
     }
 }

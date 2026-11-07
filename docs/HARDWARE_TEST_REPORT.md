@@ -26,14 +26,17 @@ guarantee that a different tvOS version or audio configuration behaves identical
 
 ## Remaining hardware acceptance
 
-- Navigation, touch gestures, power, app launching, and playback effects.
+- Navigation, live swipes, power, app launching, and playback effects.
+- Touchpad hold opening item menus, and moving, deleting, and offloading an app.
+- Holding Back, Guide, Channel up/down, Screensaver, and profile switching.
+- Scanning by holding rewind or forward, and Mute restoring the saved volume.
 - Configurable skip intervals across different tvOS applications.
 - Volume and television power through the user's audio/HDMI-CEC setup.
 - TV reboot, Wi-Fi interruption, and reconnection recovery.
 - The complete [keyboard interaction matrix](KEYBOARD_INTERACTION_MATRIX.md),
   including existing text, live editing, focus changes, and the App Store regression.
 
-Mute and Now Playing metadata remain disabled. Keyboard is available only when
+Now Playing metadata remains disabled. Keyboard is available only when
 tvOS exposes an active RTI text session; other controls use live capability gates.
 
 When reporting results, include model and software versions but omit personal

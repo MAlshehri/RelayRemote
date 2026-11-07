@@ -27,10 +27,13 @@ embed, invoke, or download Python or pyatv at runtime.
 - Ed25519 controller/accessory identities and X25519 pair verification
 - Per-direction Companion encryption keys and monotonic nonces
 - HID navigation, Back/Menu, Home, Control Center, Play/Pause, volume, wake,
-  and sleep
-- Companion touch phases for tap, hold, and swipe
-- Companion media-control requests for previous, next, and relative skip
+  sleep, Screensaver, Guide, and Channel up/down
+- Held HID Select and Back, using pyatv's press, wait, release sequence
+- Live Companion touch phases (press, hold, release) streamed during a swipe
+- Companion media-control requests for previous, next, relative skip, scan
+  begin/end, and get/set volume
 - Installed application enumeration and launch
+- User account enumeration and switching
 - RTI keyboard session detection, current-text loading, clear, and replacement
   of committed text; phone Done does not send remote Select
 - Power and media-capability event handling
@@ -39,10 +42,18 @@ Now Playing metadata is intentionally not exposed because this build does not
 include the separate Media Remote Protocol protobuf session. The UI model can
 render metadata when a future verified MRP implementation supplies it.
 
-Mute is intentionally not implemented or enabled. The pinned pyatv Companion
-implementation establishes volume up/down through HID but does not establish a
-matching mute HID command for this target. Relay Remote therefore sends no
-guessed message.
+The pinned pyatv Companion implementation establishes no mute HID command, so
+Relay Remote sends no guessed mute message. Mute instead reads the level with
+get volume, sets it to zero, and restores the saved level on unmute. It is offered
+only when the session advertises volume support.
+
+Holding Select starts when the touchpad recognizes the hold, at 400 ms. The release
+is delayed until Select has been down for at least one second, matching pyatv's
+Hold delay, so an early lift still counts as a hold on the TV.
+
+Siri audio, Subtitles, and InSight are not implemented. pyatv defines HID Siri and
+caption-setting identifiers but no working audio path or caption payload, so Relay
+Remote does not guess at them.
 
 ## Dependencies and licenses
 
