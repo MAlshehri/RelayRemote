@@ -1,6 +1,8 @@
 package io.coreback.relayremote.remote
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasScrollToNodeAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertCountEquals
@@ -11,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.click
@@ -484,7 +487,8 @@ class RemoteScreenTest {
             )
         }
 
-        compose.onNodeWithText("Forget this Apple TV").performScrollTo().performClick()
+        compose.onNode(hasScrollToNodeAction()).performScrollToNode(hasText("Forget this Apple TV"))
+        compose.onNodeWithText("Forget this Apple TV").performClick()
         compose.onNodeWithText("Forget Living Room?").assertIsDisplayed()
         assertEquals(null, forgotten)
         compose.onNodeWithText("Forget").performClick()
@@ -828,6 +832,27 @@ class RemoteScreenTest {
     }
 
     @Test
+    fun settingsOffersWidgetAndQuickSettingsIcon() {
+        var widgetRequests = 0
+        var tileRequests = 0
+        compose.setContent {
+            TestRemoteScreen(
+                state = connectedState().copy(sheet = RemoteSheet.SETTINGS),
+                onAddWidget = { widgetRequests += 1 },
+                onAddQuickSettingsTile = { tileRequests += 1 },
+            )
+        }
+
+        compose.onNodeWithText("Add Home screen widget").performClick()
+        compose.onNodeWithText("Add Quick Settings icon").performClick()
+
+        compose.runOnIdle {
+            assertEquals(1, widgetRequests)
+            assertEquals(1, tileRequests)
+        }
+    }
+
+    @Test
     fun asleepTvOffersWake() {
         var wakes = 0
         compose.setContent {
@@ -864,6 +889,8 @@ private fun TestRemoteScreen(
     onRetryKeyboard: () -> Unit = {},
     onStartFreshKeyboard: () -> Unit = {},
     onCloseKeyboardAnyway: () -> Unit = {},
+    onAddWidget: () -> Unit = {},
+    onAddQuickSettingsTile: () -> Unit = {},
 ) {
     RelayRemoteTheme {
         RemoteScreen(
@@ -897,6 +924,8 @@ private fun TestRemoteScreen(
             onRetryKeyboard = onRetryKeyboard,
             onStartFreshKeyboard = onStartFreshKeyboard,
             onCloseKeyboardAnyway = onCloseKeyboardAnyway,
+            onAddWidget = onAddWidget,
+            onAddQuickSettingsTile = onAddQuickSettingsTile,
         )
     }
 }

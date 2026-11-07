@@ -71,6 +71,8 @@ class MainActivity : ComponentActivity() {
                     onRetryKeyboard = remoteViewModel::retryKeyboardSync,
                     onStartFreshKeyboard = remoteViewModel::startFreshKeyboardText,
                     onCloseKeyboardAnyway = remoteViewModel::closeKeyboardAnyway,
+                    onAddWidget = { RemoteShortcuts.requestHomeScreenWidget(this) },
+                    onAddQuickSettingsTile = { RemoteShortcuts.requestQuickSettingsTile(this) },
                 )
             }
         }

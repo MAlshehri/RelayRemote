@@ -143,6 +143,8 @@ fun RemoteScreen(
     onRetryKeyboard: () -> Unit = {},
     onStartFreshKeyboard: () -> Unit = {},
     onCloseKeyboardAnyway: () -> Unit = {},
+    onAddWidget: () -> Unit = {},
+    onAddQuickSettingsTile: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -330,6 +332,8 @@ fun RemoteScreen(
                     onRePair = onStartPairing,
                     onDiagnostics = { onOpenSheet(RemoteSheet.DIAGNOSTICS) },
                     onLicenses = { onOpenSheet(RemoteSheet.LICENSES) },
+                    onAddWidget = onAddWidget,
+                    onAddQuickSettingsTile = onAddQuickSettingsTile,
                 )
                 RemoteSheet.DIAGNOSTICS -> DiagnosticsSheet(state)
                 RemoteSheet.LICENSES -> LicensesSheet()
@@ -1941,6 +1945,8 @@ private fun SettingsSheet(
     onRePair: (String) -> Unit,
     onDiagnostics: () -> Unit,
     onLicenses: () -> Unit,
+    onAddWidget: () -> Unit,
+    onAddQuickSettingsTile: () -> Unit,
 ) {
     var alias by remember(state.selectedDeviceName) {
         mutableStateOf(state.selectedDeviceName.orEmpty())
@@ -2014,6 +2020,9 @@ private fun SettingsSheet(
                 }
             }
         }
+        item { SettingsSectionLabel("Quick access") }
+        item { SettingsLink("Add Home screen widget", "Open the remote from your Home screen", onAddWidget) }
+        item { SettingsLink("Add Quick Settings icon", "Swipe down from the top of the screen to open the remote", onAddQuickSettingsTile) }
         state.selectedDeviceId?.let { id ->
             item { SettingsSectionLabel("Selected Apple TV") }
             item {

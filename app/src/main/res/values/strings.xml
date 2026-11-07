@@ -1,4 +1,11 @@
 <resources>
     <string name="app_name">Relay Remote</string>
     <string name="tile_label">Apple TV Remote</string>
+    <string name="tile_added">Added. Swipe down from the top of the screen to find it.</string>
+    <string name="tile_already_added">Already in Quick Settings. Swipe down from the top of the screen to find it.</string>
+    <string name="tile_add_manually">To add it yourself, swipe down from the top of the screen, tap Edit, and add Apple TV Remote.</string>
+    <string name="widget_label">Remote</string>
+    <string name="widget_description">Open the Apple TV remote</string>
+    <string name="widget_open_description">Open Apple TV remote</string>
+    <string name="widget_add_manually">To add it yourself, touch and hold the Home screen, tap Widgets, and choose Relay Remote.</string>
 </resources>

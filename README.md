@@ -50,7 +50,8 @@ data. Available controls depend on the connected TV and active app.
   switching between Apple TV profiles, all in **More**.
 - **Manage devices:** pair, reconnect, rename, and forget saved Apple TVs.
 - **Launch apps:** browse the TV's applications and pin favorites to the remote.
-- **Open it quickly:** add the Apple TV Remote tile to Android Quick Settings.
+- **Open it quickly:** add the Home screen widget or the Quick Settings icon
+  from **Settings > Quick access**.
 - **Type from your phone:** use the keyboard when tvOS exposes a text field.
   Current-text loading, full-value updates, Clear, Reload, and retry handling
   are implemented; real-TV acceptance remains pending.
